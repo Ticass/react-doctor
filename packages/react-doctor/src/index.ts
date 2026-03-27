@@ -10,6 +10,7 @@ import { runOxlint } from "./utils/run-oxlint.js";
 
 export type { Diagnostic, DiffInfo, ProjectInfo, ReactDoctorConfig, ScoreResult };
 export { getDiffInfo, filterSourceFiles } from "./utils/get-diff-files.js";
+export { buildNoBrandingReport } from "./utils/no-branding-diagnostics.js";
 
 export interface DiagnoseOptions {
   lint?: boolean;

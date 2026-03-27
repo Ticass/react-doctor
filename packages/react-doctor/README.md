@@ -151,8 +151,17 @@ The `diagnose` function accepts an optional second argument:
 const result = await diagnose(".", {
   lint: true, // run lint checks (default: true)
   deadCode: true, // run dead code detection (default: true)
-  noBranding: true, // output clean HTML instead of ASCII branding (default: false)
 });
+```
+
+To generate a clean HTML report (the same output as `--hide-branding`) from the API:
+
+```js
+import { diagnose, buildNoBrandingReport } from "react-doctor/api";
+
+const result = await diagnose("./path/to/your/react-project");
+const html = buildNoBrandingReport(result.diagnostics, result.score);
+// Returns GitHub-compatible HTML with score, counts, and a collapsible diagnostics table
 ```
 
 Each diagnostic has the following shape:
