@@ -96,7 +96,9 @@ runs:
           const raw = fs.readFileSync(path, "utf8").trim();
           if (!raw) return;
 
-          const clean = raw.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "").trim();
+          const stripped = raw.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+          const htmlStart = stripped.indexOf("<h3>");
+          const clean = htmlStart !== -1 ? stripped.substring(htmlStart).trim() : stripped.trim();
 
           const marker = "<!-- react-doctor -->";
           const body = `${marker}\n## 🩺 React Doctor\n\n${clean}`;
