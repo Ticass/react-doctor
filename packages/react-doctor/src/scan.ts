@@ -587,6 +587,10 @@ export const scan = async (
   }
 
   if (diagnostics.length === 0) {
+    if (options.noBranding) {
+      logger.log(buildNoBrandingReport(diagnostics, scoreResult));
+      return { diagnostics, scoreResult, skippedChecks };
+    }
     if (hasSkippedChecks) {
       const skippedLabel = skippedChecks.join(" and ");
       logger.warn(
@@ -610,7 +614,7 @@ export const scan = async (
     return { diagnostics, scoreResult, skippedChecks };
   }
 
-  printDiagnostics(diagnostics, options.verbose);
+  if (!options.noBranding) printDiagnostics(diagnostics, options.verbose);
 
   const displayedSourceFileCount = isDiffMode ? includePaths.length : projectInfo.sourceFileCount;
 
@@ -625,7 +629,7 @@ export const scan = async (
     options.noBranding,
   );
 
-  if (hasSkippedChecks) {
+  if (hasSkippedChecks && !options.noBranding) {
     const skippedLabel = skippedChecks.join(" and ");
     logger.break();
     logger.warn(`  Note: ${skippedLabel} checks failed — score may be incomplete.`);

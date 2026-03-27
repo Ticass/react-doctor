@@ -156,8 +156,8 @@ const program = new Command()
       const resolvedDirectory = path.resolve(directory);
       const userConfig = loadConfig(resolvedDirectory);
 
-      if (!isScoreOnly) {
-        logger.log(`react-doctor v${VERSION}`);
+      if (!isScoreOnly && !flags.hideBranding) {
+        logger.log(\`react-doctor v\${VERSION}\`);
         logger.break();
       }
 
@@ -181,7 +181,7 @@ const program = new Command()
         isScoreOnly,
       );
 
-      if (isDiffMode && diffInfo && !isScoreOnly) {
+      if (isDiffMode && diffInfo && !isScoreOnly && !flags.hideBranding) {
         if (diffInfo.isCurrentChanges) {
           logger.log("Scanning uncommitted changes");
         } else {
@@ -201,8 +201,8 @@ const program = new Command()
           if (projectDiffInfo) {
             const changedSourceFiles = filterSourceFiles(projectDiffInfo.changedFiles);
             if (changedSourceFiles.length === 0) {
-              if (!isScoreOnly) {
-                logger.dim(`No changed source files in ${projectDirectory}, skipping.`);
+              if (!isScoreOnly && !flags.hideBranding) {
+                logger.dim(\`No changed source files in \${projectDirectory}, skipping.\`);
                 logger.break();
               }
               continue;
@@ -211,13 +211,13 @@ const program = new Command()
           }
         }
 
-        if (!isScoreOnly) {
-          logger.dim(`Scanning ${projectDirectory}...`);
+        if (!isScoreOnly && !flags.hideBranding) {
+          logger.dim(\`Scanning \${projectDirectory}...\`);
           logger.break();
         }
         const scanResult = await scan(projectDirectory, { ...scanOptions, includePaths });
         allDiagnostics.push(...scanResult.diagnostics);
-        if (!isScoreOnly) {
+        if (!isScoreOnly && !flags.hideBranding) {
           logger.break();
         }
       }
