@@ -4,3 +4,6 @@ dist
 .DS_Store
 .agents
 .cursor
+package-lock.json
+.claude/
+bun-lock.json
