@@ -1,13 +1,14 @@
 {
-  "name": "react-doctor",
+  "name": "react-doctor-rewritten",
   "private": true,
-  "homepage": "https://github.com/aidenybai/react-doctor#readme",
+  "homepage": "https://github.com/Ticass/react-doctor#readme",
+  "version": "1.0.0",
   "bugs": {
-    "url": "https://github.com/aidenybai/react-doctor/issues"
+    "url": "https://github.com/Ticass/react-doctor/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/aidenybai/react-doctor.git"
+    "url": "https://github.com/Ticass/react-doctor.git"
   },
   "scripts": {
     "dev": "pnpm --filter react-doctor-rewritten run dev",
