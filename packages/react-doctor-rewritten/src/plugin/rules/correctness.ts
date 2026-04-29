@@ -1,5 +1,5 @@
-import { INDEX_PARAMETER_NAMES } from "../constants.js";
-import { findJsxAttribute, walkAst } from "../helpers.js";
+import { CONTROLLED_INPUT_ELEMENTS, INDEX_PARAMETER_NAMES } from "../constants.js";
+import { findJsxAttribute, hasJsxAttribute, isHookCall, walkAst } from "../helpers.js";
 import type { EsTreeNode, Rule, RuleContext } from "../types.js";
 
 const extractIndexName = (node: EsTreeNode): string | null => {
@@ -157,4 +157,64 @@ export const renderingConditionalRender: Rule = {
       }
     },
   }),
+};
+
+export const noUncontrolledInput: Rule = {
+  create: (context: RuleContext) => {
+    // Tracks state variables initialized as undefined so we can detect the
+    // uncontrolled→controlled flip: useState(undefined) then used as value={x}.
+    const undefinedStateVars = new Set<string>();
+
+    return {
+      VariableDeclarator(node: EsTreeNode) {
+        if (node.id?.type !== "ArrayPattern") return;
+        if (!isHookCall(node.init, "useState")) return;
+        const stateElement = node.id.elements?.[0];
+        if (stateElement?.type !== "Identifier") return;
+        const args = node.init.arguments ?? [];
+        // useState() and useState(undefined) both produce an undefined initial value
+        const startsUndefined =
+          args.length === 0 ||
+          (args[0]?.type === "Identifier" && args[0].name === "undefined");
+        if (startsUndefined) undefinedStateVars.add(stateElement.name);
+      },
+
+      JSXOpeningElement(node: EsTreeNode) {
+        const elementName = node.name?.type === "JSXIdentifier" ? node.name.name : null;
+        if (!elementName || !CONTROLLED_INPUT_ELEMENTS.has(elementName)) return;
+
+        const attributes = node.attributes ?? [];
+        const valueAttr = findJsxAttribute(attributes, "value");
+        const defaultValueAttr = findJsxAttribute(attributes, "defaultValue");
+        const hasOnChange = hasJsxAttribute(attributes, "onChange");
+        const hasReadOnly = hasJsxAttribute(attributes, "readOnly");
+
+        if (valueAttr && !hasOnChange && !hasReadOnly) {
+          context.report({
+            node: valueAttr,
+            message: `<${elementName} value={...}> without onChange or readOnly — add an onChange handler or use defaultValue for an uncontrolled input`,
+          });
+        }
+
+        // defaultValue is silently ignored on a controlled input
+        if (valueAttr && defaultValueAttr) {
+          context.report({
+            node: defaultValueAttr,
+            message: `<${elementName}> has both value and defaultValue — defaultValue is ignored on controlled inputs, remove it`,
+          });
+        }
+
+        // Detect the undefined→string flip: starts uncontrolled, becomes controlled on first update
+        if (valueAttr?.value?.type === "JSXExpressionContainer") {
+          const expression = valueAttr.value.expression;
+          if (expression?.type === "Identifier" && undefinedStateVars.has(expression.name)) {
+            context.report({
+              node: valueAttr,
+              message: `"${expression.name}" is initialized as undefined — the input starts uncontrolled and switches to controlled on first update, use "" as the initial value instead`,
+            });
+          }
+        }
+      },
+    };
+  },
 };

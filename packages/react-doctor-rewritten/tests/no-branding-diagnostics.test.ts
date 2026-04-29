@@ -138,6 +138,20 @@ describe("buildNoBrandingReport", () => {
     expect(rowCount).toBe(3);
   });
 
+  it("emits the full-scan thread marker by default", () => {
+    const result = buildNoBrandingReport([], createScoreResult());
+    expect(result).toContain("<!-- react-doctor-thread:full -->");
+    expect(result).toContain("Full Repository Scan");
+    expect(result).not.toContain("<!-- react-doctor-thread:pr -->");
+  });
+
+  it("emits the pr thread marker when thread is 'pr'", () => {
+    const result = buildNoBrandingReport([], createScoreResult(), "pr");
+    expect(result).toContain("<!-- react-doctor-thread:pr -->");
+    expect(result).toContain("Pull Request Changes");
+    expect(result).not.toContain("<!-- react-doctor-thread:full -->");
+  });
+
   it("handles score at exact tier boundaries", () => {
     expect(buildNoBrandingReport([], createScoreResult({ score: 75 }))).toContain("🟢");
     expect(buildNoBrandingReport([], createScoreResult({ score: 74 }))).toContain("🟡");

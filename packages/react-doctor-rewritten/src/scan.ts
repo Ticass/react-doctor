@@ -16,6 +16,7 @@ import {
 } from "./constants.js";
 import type {
   Diagnostic,
+  NoBrandingThread,
   ProjectInfo,
   ReactDoctorConfig,
   ScanOptions,
@@ -321,9 +322,10 @@ const printSummary = (
   noScoreMessage: string,
   isOffline: boolean,
   noBranding: boolean,
+  noBrandingThread: NoBrandingThread,
 ): void => {
   if (noBranding) {
-    logger.log(buildNoBrandingReport(diagnostics, scoreResult));
+    logger.log(buildNoBrandingReport(diagnostics, scoreResult, noBrandingThread));
     return;
   }
 
@@ -413,6 +415,7 @@ interface ResolvedScanOptions {
   scoreOnly: boolean;
   offline: boolean;
   noBranding: boolean;
+  noBrandingThread: NoBrandingThread;
   includePaths: string[];
 }
 
@@ -423,6 +426,7 @@ const SCAN_DEFAULTS: ResolvedScanOptions = {
   scoreOnly: false,
   offline: false,
   noBranding: false,
+  noBrandingThread: "full",
   includePaths: [],
 };
 
@@ -588,7 +592,7 @@ export const scan = async (
 
   if (diagnostics.length === 0) {
     if (options.noBranding) {
-      logger.log(buildNoBrandingReport(diagnostics, scoreResult));
+      logger.log(buildNoBrandingReport(diagnostics, scoreResult, options.noBrandingThread));
       return { diagnostics, scoreResult, skippedChecks };
     }
     if (hasSkippedChecks) {
@@ -627,6 +631,7 @@ export const scan = async (
     noScoreMessage,
     options.offline,
     options.noBranding,
+    options.noBrandingThread,
   );
 
   if (hasSkippedChecks && !options.noBranding) {

@@ -15,6 +15,7 @@ import { clientPassiveEventListeners } from "./rules/client.js";
 import {
   noArrayIndexAsKey,
   noPreventDefault,
+  noUncontrolledInput,
   renderingConditionalRender,
 } from "./rules/correctness.js";
 import {
@@ -76,8 +77,10 @@ import {
   noCascadingSetState,
   noDerivedStateEffect,
   noDerivedUseState,
+  noDirectStateMutation,
   noEffectEventHandler,
   noFetchInEffect,
+  noSetStateInRender,
   preferUseReducer,
   rerenderDependencies,
   rerenderFunctionalSetstate,
@@ -93,6 +96,8 @@ const plugin: RulePlugin = {
     "no-cascading-set-state": noCascadingSetState,
     "no-effect-event-handler": noEffectEventHandler,
     "no-derived-useState": noDerivedUseState,
+    "no-direct-state-mutation": noDirectStateMutation,
+    "no-set-state-in-render": noSetStateInRender,
     "prefer-useReducer": preferUseReducer,
     "rerender-lazy-state-init": rerenderLazyStateInit,
     "rerender-functional-setstate": rerenderFunctionalSetstate,
@@ -128,6 +133,7 @@ const plugin: RulePlugin = {
     "no-array-index-as-key": noArrayIndexAsKey,
     "rendering-conditional-render": renderingConditionalRender,
     "no-prevent-default": noPreventDefault,
+    "no-uncontrolled-input": noUncontrolledInput,
 
     "nextjs-no-img-element": nextjsNoImgElement,
     "nextjs-async-client-component": nextjsAsyncClientComponent,

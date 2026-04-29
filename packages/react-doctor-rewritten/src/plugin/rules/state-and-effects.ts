@@ -2,6 +2,7 @@ import {
   CASCADING_SET_STATE_THRESHOLD,
   EFFECT_HOOK_NAMES,
   HOOKS_WITH_DEPS,
+  MUTATING_ARRAY_METHODS,
   RELATED_USE_STATE_THRESHOLD,
   TRIVIAL_INITIALIZER_NAMES,
 } from "../constants.js";
@@ -12,10 +13,12 @@ import {
   getCallbackStatements,
   getEffectCallback,
   isComponentAssignment,
+  isComponentDeclaration,
   isHookCall,
   isSetterIdentifier,
   isUppercaseName,
   walkAst,
+  walkShallow,
 } from "../helpers.js";
 import type { EsTreeNode, Rule, RuleContext } from "../types.js";
 
@@ -292,4 +295,102 @@ export const rerenderDependencies: Rule = {
       }
     },
   }),
+};
+
+export const noDirectStateMutation: Rule = {
+  create: (context: RuleContext) => {
+    // Maps state variable name → true so we can check mutations anywhere in the file.
+    // Collected from useState destructuring: const [items, setItems] = useState(...)
+    const stateVarNames = new Set<string>();
+
+    return {
+      VariableDeclarator(node: EsTreeNode) {
+        if (node.id?.type !== "ArrayPattern") return;
+        if (!isHookCall(node.init, "useState")) return;
+        const stateElement = node.id.elements?.[0];
+        if (stateElement?.type === "Identifier") {
+          stateVarNames.add(stateElement.name);
+        }
+      },
+
+      AssignmentExpression(node: EsTreeNode) {
+        if (node.left?.type !== "MemberExpression") return;
+        // Walk up nested member chains to find the root: stateVar.a.b.c = x
+        let root = node.left.object;
+        while (root?.type === "MemberExpression") root = root.object;
+        if (root?.type !== "Identifier" || !stateVarNames.has(root.name)) return;
+        context.report({
+          node,
+          message: `Direct mutation of state "${root.name}" — pass a new value to the setter instead of mutating in place`,
+        });
+      },
+
+      CallExpression(node: EsTreeNode) {
+        if (node.callee?.type !== "MemberExpression") return;
+        const methodName =
+          node.callee.property?.type === "Identifier" ? node.callee.property.name : null;
+        if (!methodName || !MUTATING_ARRAY_METHODS.has(methodName)) return;
+        // Walk up member chains so stateVar.nested.push() is also caught
+        let root = node.callee.object;
+        while (root?.type === "MemberExpression") root = root.object;
+        if (root?.type !== "Identifier" || !stateVarNames.has(root.name)) return;
+        context.report({
+          node,
+          message: `${root.name}.${methodName}() mutates state in place — use a method that returns a new array (spread, filter, map, toSorted, etc.)`,
+        });
+      },
+    };
+  },
+};
+
+export const noSetStateInRender: Rule = {
+  create: (context: RuleContext) => {
+    // Analyzes a component's render body for direct setter calls.
+    // Two passes are needed: first collect setter names, then scan for calls —
+    // because a setter used before its useState declaration would be missed in one pass.
+    const analyzeBody = (bodyStatements: EsTreeNode[]): void => {
+      const setterNames = new Set<string>();
+
+      for (const statement of bodyStatements) {
+        walkShallow(statement, (node) => {
+          if (
+            node.type === "VariableDeclarator" &&
+            node.id?.type === "ArrayPattern" &&
+            isHookCall(node.init, "useState")
+          ) {
+            const setter = node.id.elements?.[1];
+            if (setter?.type === "Identifier") setterNames.add(setter.name);
+          }
+        });
+      }
+
+      if (setterNames.size === 0) return;
+
+      for (const statement of bodyStatements) {
+        walkShallow(statement, (node) => {
+          if (
+            node.type === "CallExpression" &&
+            node.callee?.type === "Identifier" &&
+            setterNames.has(node.callee.name)
+          ) {
+            context.report({
+              node,
+              message: `${node.callee.name}() called during render — move this into a useEffect or an event handler to avoid an infinite render loop`,
+            });
+          }
+        });
+      }
+    };
+
+    return {
+      FunctionDeclaration(node: EsTreeNode) {
+        if (!isComponentDeclaration(node)) return;
+        analyzeBody(node.body?.body ?? []);
+      },
+      VariableDeclarator(node: EsTreeNode) {
+        if (!isComponentAssignment(node)) return;
+        analyzeBody(node.init.body?.body ?? []);
+      },
+    };
+  },
 };

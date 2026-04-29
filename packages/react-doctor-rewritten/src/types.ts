@@ -106,6 +106,8 @@ export interface EstimatedScoreResult {
   estimatedLabel: string;
 }
 
+export type NoBrandingThread = "full" | "pr";
+
 export interface ScanOptions {
   lint?: boolean;
   deadCode?: boolean;
@@ -113,6 +115,7 @@ export interface ScanOptions {
   scoreOnly?: boolean;
   offline?: boolean;
   noBranding?: boolean;
+  noBrandingThread?: NoBrandingThread;
   includePaths?: string[];
 }
 
