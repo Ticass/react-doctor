@@ -17,6 +17,9 @@ importers:
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
+      pnpm:
+        specifier: ^10.33.0
+        version: 10.33.2
     devDependencies:
       '@changesets/cli':
         specifier: ^2.27.0
@@ -40,7 +43,7 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@20.19.33)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.46.0)
 
-  packages/react-doctor:
+  packages/react-doctor-rewritten:
     dependencies:
       commander:
         specifier: ^14.0.3
@@ -2269,6 +2272,11 @@ packages:
   pify@4.0.1:
     resolution: {integrity: sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g==}
     engines: {node: '>=6'}
+
+  pnpm@10.33.2:
+    resolution: {integrity: sha512-qQ+vb+6rca1sblf5Tg/hoS9dzCLNdU20CulZPraj4LaxLjVAIYuzeuCDQEsfLObbKkEh6XmCm0r/lLmfSdoc+A==}
+    engines: {node: '>=18.12'}
+    hasBin: true
 
   postcss@8.4.31:
     resolution: {integrity: sha512-PS08Iboia9mts/2ygV3eLpY5ghnUcfLV/EXTOW1E2qYxJKGGBUtNjN76FYHnMs36RmARn41bC0AZmn+rR0OVpQ==}
@@ -4522,6 +4530,8 @@ snapshots:
   picomatch@4.0.3: {}
 
   pify@4.0.1: {}
+
+  pnpm@10.33.2: {}
 
   postcss@8.4.31:
     dependencies:

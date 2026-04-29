@@ -250,6 +250,20 @@ export const MUTATING_ROUTE_SEGMENTS = new Set([
   "deactivate",
 ]);
 
+export const MUTATING_ARRAY_METHODS = new Set([
+  "push",
+  "pop",
+  "shift",
+  "unshift",
+  "splice",
+  "sort",
+  "reverse",
+  "fill",
+  "copyWithin",
+]);
+
+export const CONTROLLED_INPUT_ELEMENTS = new Set(["input", "textarea", "select"]);
+
 export const EFFECT_HOOK_NAMES = new Set(["useEffect", "useLayoutEffect"]);
 export const HOOKS_WITH_DEPS = new Set(["useEffect", "useLayoutEffect", "useMemo", "useCallback"]);
 export const CHAINABLE_ITERATION_METHODS = new Set(["map", "filter", "forEach", "flatMap"]);

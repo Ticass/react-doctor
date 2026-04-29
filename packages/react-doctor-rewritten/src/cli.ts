@@ -40,6 +40,7 @@ interface CliFlags {
   diff?: boolean | string;
   failOn: string;
   hideBranding: boolean;
+  hideBrandingPr: boolean;
 }
 
 const VALID_FAIL_ON_LEVELS = new Set<FailOnLevel>(["error", "warning", "none"]);
@@ -91,7 +92,8 @@ const resolveCliScanOptions = (
     verbose: isCliOverride("verbose") ? Boolean(flags.verbose) : (userConfig?.verbose ?? false),
     scoreOnly: flags.score,
     offline: flags.offline,
-    noBranding: flags.hideBranding,
+    noBranding: flags.hideBranding || flags.hideBrandingPr,
+    noBrandingThread: flags.hideBrandingPr ? "pr" : "full",
   };
 };
 
@@ -149,14 +151,19 @@ const program = new Command()
   .option("--fail-on <level>", "exit with error code on diagnostics: error, warning, none", "none")
   .option("--fix", "open Ami to auto-fix all issues")
   .option("--hide-branding", "suppress branding for clean CI/PR output")
+  .option(
+    "--hide-branding-pr",
+    "suppress branding and only scan files changed in the current branch/PR",
+  )
   .action(async (directory: string, flags: CliFlags) => {
     const isScoreOnly = flags.score;
+    const isBrandingHidden = flags.hideBranding || flags.hideBrandingPr;
 
     try {
       const resolvedDirectory = path.resolve(directory);
       const userConfig = loadConfig(resolvedDirectory);
 
-      if (!isScoreOnly && !flags.hideBranding) {
+      if (!isScoreOnly && !isBrandingHidden) {
         logger.log(`react-doctor v${VERSION}`);
         logger.break();
       }
@@ -171,17 +178,18 @@ const program = new Command()
       );
 
       const isDiffCliOverride = program.getOptionValueSource("diff") === "cli";
-      const effectiveDiff = isDiffCliOverride ? flags.diff : userConfig?.diff;
+      const configuredDiff = isDiffCliOverride ? flags.diff : userConfig?.diff;
+      const effectiveDiff = flags.hideBrandingPr ? true : configuredDiff;
       const explicitBaseBranch = typeof effectiveDiff === "string" ? effectiveDiff : undefined;
       const diffInfo = getDiffInfo(resolvedDirectory, explicitBaseBranch);
       const isDiffMode = await resolveDiffMode(
         diffInfo,
         effectiveDiff,
-        shouldSkipPrompts,
+        shouldSkipPrompts || flags.hideBrandingPr,
         isScoreOnly,
       );
 
-      if (isDiffMode && diffInfo && !isScoreOnly && !flags.hideBranding) {
+      if (isDiffMode && diffInfo && !isScoreOnly && !isBrandingHidden) {
         if (diffInfo.isCurrentChanges) {
           logger.log("Scanning uncommitted changes");
         } else {
@@ -201,7 +209,7 @@ const program = new Command()
           if (projectDiffInfo) {
             const changedSourceFiles = filterSourceFiles(projectDiffInfo.changedFiles);
             if (changedSourceFiles.length === 0) {
-              if (!isScoreOnly && !flags.hideBranding) {
+              if (!isScoreOnly && !isBrandingHidden) {
                 logger.dim(`No changed source files in ${projectDirectory}, skipping.`);
                 logger.break();
               }
@@ -211,13 +219,13 @@ const program = new Command()
           }
         }
 
-        if (!isScoreOnly && !flags.hideBranding) {
+        if (!isScoreOnly && !isBrandingHidden) {
           logger.dim(`Scanning ${projectDirectory}...`);
           logger.break();
         }
         const scanResult = await scan(projectDirectory, { ...scanOptions, includePaths });
         allDiagnostics.push(...scanResult.diagnostics);
-        if (!isScoreOnly && !flags.hideBranding) {
+        if (!isScoreOnly && !isBrandingHidden) {
           logger.break();
         }
       }

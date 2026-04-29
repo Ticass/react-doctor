@@ -157,6 +157,37 @@ export const findJsxAttribute = (
 export const hasJsxAttribute = (attributes: EsTreeNode[], attributeName: string): boolean =>
   Boolean(findJsxAttribute(attributes, attributeName));
 
+// Like walkAst but stops descending into function bodies — used to find patterns
+// directly in a component's render logic without crossing into callbacks or handlers.
+export const walkShallow = (node: EsTreeNode, visitor: (child: EsTreeNode) => void): void => {
+  if (!node || typeof node !== "object") return;
+  visitor(node);
+  for (const key of Object.keys(node)) {
+    if (key === "parent") continue;
+    const child = node[key];
+    if (Array.isArray(child)) {
+      for (const item of child) {
+        if (!item || typeof item !== "object" || !item.type) continue;
+        if (
+          item.type === "FunctionDeclaration" ||
+          item.type === "FunctionExpression" ||
+          item.type === "ArrowFunctionExpression"
+        )
+          continue;
+        walkShallow(item, visitor);
+      }
+    } else if (child && typeof child === "object" && child.type) {
+      if (
+        child.type === "FunctionDeclaration" ||
+        child.type === "FunctionExpression" ||
+        child.type === "ArrowFunctionExpression"
+      )
+        continue;
+      walkShallow(child, visitor);
+    }
+  }
+};
+
 export const createLoopAwareVisitors = (
   innerVisitors: Record<string, (node: EsTreeNode) => void>,
 ): RuleVisitors => {

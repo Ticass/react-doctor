@@ -1,5 +1,15 @@
 import { SCORE_GOOD_THRESHOLD, SCORE_OK_THRESHOLD } from "../constants.js";
-import type { Diagnostic, ScoreResult } from "../types.js";
+import type { Diagnostic, NoBrandingThread, ScoreResult } from "../types.js";
+
+const THREAD_MARKERS: Record<NoBrandingThread, string> = {
+  full: "<!-- react-doctor-thread:full -->",
+  pr: "<!-- react-doctor-thread:pr -->",
+};
+
+const THREAD_HEADINGS: Record<NoBrandingThread, string> = {
+  full: "React Doctor — Full Repository Scan",
+  pr: "React Doctor — Pull Request Changes",
+};
 
 interface ScoreTier {
   min: number;
@@ -70,6 +80,7 @@ ${rows}
 export const buildNoBrandingReport = (
   diagnostics: Diagnostic[],
   scoreResult: ScoreResult | null,
+  thread: NoBrandingThread = "full",
 ): string => {
   const score = scoreResult?.score ?? null;
   const label = scoreResult?.label ?? "";
@@ -77,7 +88,8 @@ export const buildNoBrandingReport = (
   const scoreDisplay = score !== null ? String(score) : "N/A";
 
   return [
-    `<h3>${scoreEmoji} Score: ${scoreDisplay} / 100 — ${label}</h3>`,
+    THREAD_MARKERS[thread],
+    `<h3>${scoreEmoji} ${THREAD_HEADINGS[thread]} — Score: ${scoreDisplay} / 100 — ${label}</h3>`,
     "",
     `<p>${buildCountsLine(diagnostics)}</p>`,
     "",

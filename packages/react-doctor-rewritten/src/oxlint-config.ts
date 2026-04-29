@@ -116,6 +116,8 @@ export const createOxlintConfig = ({
     "react-doctor/no-cascading-set-state": "warn",
     "react-doctor/no-effect-event-handler": "warn",
     "react-doctor/no-derived-useState": "warn",
+    "react-doctor/no-direct-state-mutation": "error",
+    "react-doctor/no-set-state-in-render": "error",
     "react-doctor/prefer-useReducer": "warn",
     "react-doctor/rerender-lazy-state-init": "warn",
     "react-doctor/rerender-functional-setstate": "warn",
@@ -150,6 +152,7 @@ export const createOxlintConfig = ({
     "react-doctor/no-array-index-as-key": "warn",
     "react-doctor/rendering-conditional-render": "warn",
     "react-doctor/no-prevent-default": "warn",
+    "react-doctor/no-uncontrolled-input": "warn",
 
     "react-doctor/server-auth-actions": "error",
     "react-doctor/server-after-nonblocking": "warn",
