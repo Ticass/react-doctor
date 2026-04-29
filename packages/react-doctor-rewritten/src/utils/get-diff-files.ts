@@ -1,6 +1,58 @@
+import fs from "node:fs";
 import { execSync } from "node:child_process";
 import { DEFAULT_BRANCH_CANDIDATES, SOURCE_FILE_PATTERN } from "../constants.js";
 import type { DiffInfo } from "../types.js";
+
+interface GitHubPullRequestEventBranch {
+  ref?: string;
+  sha?: string;
+}
+
+interface GitHubPullRequestEvent {
+  pull_request?: {
+    base?: GitHubPullRequestEventBranch;
+    head?: GitHubPullRequestEventBranch;
+  };
+}
+
+const getGitHubPullRequestEvent = (): GitHubPullRequestEvent | null => {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath || !fs.existsSync(eventPath)) {
+    return null;
+  }
+
+  try {
+    const eventContents = fs.readFileSync(eventPath, "utf8");
+    return JSON.parse(eventContents) as GitHubPullRequestEvent;
+  } catch {
+    return null;
+  }
+};
+
+const getGitHubActionsHeadBranch = (): string | null => {
+  const githubHeadRef = process.env.GITHUB_HEAD_REF;
+  if (githubHeadRef) {
+    return githubHeadRef;
+  }
+
+  const event = getGitHubPullRequestEvent();
+  return event?.pull_request?.head?.ref ?? null;
+};
+
+const getGitHubActionsBaseBranch = (): string | null => {
+  const githubBaseRef = process.env.GITHUB_BASE_REF;
+  if (githubBaseRef) {
+    return githubBaseRef;
+  }
+
+  const event = getGitHubPullRequestEvent();
+  return event?.pull_request?.base?.ref ?? null;
+};
+
+const getGitHubActionsBaseSha = (): string | null => {
+  const event = getGitHubPullRequestEvent();
+  return event?.pull_request?.base?.sha ?? null;
+};
 
 const getCurrentBranch = (directory: string): string | null => {
   try {
@@ -10,13 +62,23 @@ const getCurrentBranch = (directory: string): string | null => {
     })
       .toString()
       .trim();
-    return branch === "HEAD" ? null : branch;
+
+    if (branch === "HEAD") {
+      return getGitHubActionsHeadBranch();
+    }
+
+    return branch;
   } catch {
-    return null;
+    return getGitHubActionsHeadBranch();
   }
 };
 
 const detectDefaultBranch = (directory: string): string | null => {
+  const githubActionsBaseBranch = getGitHubActionsBaseBranch();
+  if (githubActionsBaseBranch) {
+    return githubActionsBaseBranch;
+  }
+
   try {
     const reference = execSync("git symbolic-ref refs/remotes/origin/HEAD", {
       cwd: directory,
@@ -39,9 +101,39 @@ const detectDefaultBranch = (directory: string): string | null => {
   }
 };
 
-const getChangedFilesSinceBranch = (directory: string, baseBranch: string): string[] => {
+const resolveBaseBranchReference = (
+  directory: string,
+  baseBranch: string,
+  baseSha: string | null,
+): string => {
+  const candidateReferences = [
+    baseSha,
+    `origin/${baseBranch}`,
+    `remotes/origin/${baseBranch}`,
+    baseBranch,
+  ].filter(Boolean) as string[];
+
+  for (const candidateReference of candidateReferences) {
+    try {
+      execSync(`git rev-parse --verify ${candidateReference}`, {
+        cwd: directory,
+        stdio: "pipe",
+      });
+      return candidateReference;
+    } catch {}
+  }
+
+  return baseBranch;
+};
+
+const getChangedFilesSinceBranch = (
+  directory: string,
+  baseBranch: string,
+  baseSha: string | null,
+): string[] => {
   try {
-    const mergeBase = execSync(`git merge-base ${baseBranch} HEAD`, {
+    const resolvedBaseBranchReference = resolveBaseBranchReference(directory, baseBranch, baseSha);
+    const mergeBase = execSync(`git merge-base ${resolvedBaseBranchReference} HEAD`, {
       cwd: directory,
       stdio: "pipe",
     })
@@ -90,7 +182,7 @@ export const getDiffInfo = (directory: string, explicitBaseBranch?: string): Dif
     return { currentBranch, baseBranch, changedFiles: uncommittedFiles, isCurrentChanges: true };
   }
 
-  const changedFiles = getChangedFilesSinceBranch(directory, baseBranch);
+  const changedFiles = getChangedFilesSinceBranch(directory, baseBranch, getGitHubActionsBaseSha());
   return { currentBranch, baseBranch, changedFiles };
 };
 

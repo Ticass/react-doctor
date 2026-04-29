@@ -490,7 +490,7 @@ export const scan = async (
     throw new Error("No React dependency found in package.json");
   }
 
-  if (!options.scoreOnly) {
+  if (!options.scoreOnly && !options.noBranding) {
     printProjectDetection(projectInfo, userConfig, isDiffMode, includePaths);
   }
 
@@ -504,7 +504,8 @@ export const scan = async (
 
   const lintPromise = resolvedNodeBinaryPath
     ? (async () => {
-        const lintSpinner = options.scoreOnly ? null : spinner("Running lint checks...").start();
+        const lintSpinner =
+          options.scoreOnly || options.noBranding ? null : spinner("Running lint checks...").start();
         try {
           const lintDiagnostics = await runOxlint(
             directory,
@@ -518,7 +519,7 @@ export const scan = async (
           return lintDiagnostics;
         } catch (error) {
           didLintFail = true;
-          if (!options.scoreOnly) {
+          if (!options.scoreOnly && !options.noBranding) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const isNativeBindingError = errorMessage.includes("native binding");
 
@@ -542,7 +543,7 @@ export const scan = async (
   const deadCodePromise =
     options.deadCode && !isDiffMode
       ? (async () => {
-          const deadCodeSpinner = options.scoreOnly
+          const deadCodeSpinner = options.scoreOnly || options.noBranding
             ? null
             : spinner("Detecting dead code...").start();
           try {
@@ -551,7 +552,7 @@ export const scan = async (
             return knipDiagnostics;
           } catch (error) {
             didDeadCodeFail = true;
-            if (!options.scoreOnly) {
+            if (!options.scoreOnly && !options.noBranding) {
               deadCodeSpinner?.fail("Dead code detection failed (non-fatal, skipping).");
               logger.error(String(error));
             }
