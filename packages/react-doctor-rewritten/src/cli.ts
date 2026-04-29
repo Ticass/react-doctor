@@ -102,10 +102,11 @@ const resolveDiffMode = async (
   effectiveDiff: boolean | string | undefined,
   shouldSkipPrompts: boolean,
   isScoreOnly: boolean,
+  shouldReportFallbackMessage: boolean,
 ): Promise<boolean> => {
   if (effectiveDiff !== undefined && effectiveDiff !== false) {
     if (diffInfo) return true;
-    if (!isScoreOnly) {
+    if (!isScoreOnly && shouldReportFallbackMessage) {
       logger.warn("No feature branch or uncommitted changes detected. Running full scan.");
       logger.break();
     }
@@ -175,6 +176,7 @@ const program = new Command()
         resolvedDirectory,
         flags.project,
         shouldSkipPrompts,
+        !isBrandingHidden,
       );
 
       const isDiffCliOverride = program.getOptionValueSource("diff") === "cli";
@@ -187,6 +189,7 @@ const program = new Command()
         effectiveDiff,
         shouldSkipPrompts || flags.hideBrandingPr,
         isScoreOnly,
+        !isBrandingHidden,
       );
 
       if (isDiffMode && diffInfo && !isScoreOnly && !isBrandingHidden) {
