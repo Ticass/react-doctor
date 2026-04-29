@@ -18,8 +18,8 @@ Flags in-place mutation of a `useState` value — both property assignments and 
 
 ```jsx
 const [items, setItems] = useState([]);
-items.push(newItem);   // ✗ no-direct-state-mutation
-items[0] = newItem;    // ✗ no-direct-state-mutation
+items.push(newItem); // ✗ no-direct-state-mutation
+items[0] = newItem; // ✗ no-direct-state-mutation
 setItems([...items, newItem]); // ✓
 ```
 
@@ -30,7 +30,7 @@ Flags setter calls executed during render — the classic infinite-loop bug. Use
 ```jsx
 function Profile() {
   const [name, setName] = useState("");
-  setName("Alice");  // ✗ no-set-state-in-render — infinite loop
+  setName("Alice"); // ✗ no-set-state-in-render — infinite loop
   return <h1>{name}</h1>;
 }
 ```
@@ -77,10 +77,10 @@ npx react-doctor-rewritten . --hide-branding-pr
 
 The two flags emit different HTML comment markers so a GitHub Action can locate and update each thread independently:
 
-| Flag                  | Marker                                  | Heading                              |
-| --------------------- | --------------------------------------- | ------------------------------------ |
-| `--hide-branding`     | `<!-- react-doctor-thread:full -->`     | React Doctor — Full Repository Scan  |
-| `--hide-branding-pr`  | `<!-- react-doctor-thread:pr -->`       | React Doctor — Pull Request Changes  |
+| Flag                 | Marker                              | Heading                             |
+| -------------------- | ----------------------------------- | ----------------------------------- |
+| `--hide-branding`    | `<!-- react-doctor-thread:full -->` | React Doctor — Full Repository Scan |
+| `--hide-branding-pr` | `<!-- react-doctor-thread:pr -->`   | React Doctor — Pull Request Changes |
 
 This means you can run both flags in the same workflow and get two persistent, independently-updated PR comments — one for the whole-repo health check, one for "did this PR introduce new issues?".
 
@@ -92,7 +92,7 @@ The HTML-report builder is exposed on `react-doctor-rewritten/api`, so you can r
 import { diagnose, buildNoBrandingReport } from "react-doctor-rewritten/api";
 
 const result = await diagnose("./my-app");
-const html = buildNoBrandingReport(result.diagnostics, result.score);          // full
+const html = buildNoBrandingReport(result.diagnostics, result.score); // full
 const prHtml = buildNoBrandingReport(result.diagnostics, result.score, "pr"); // pr thread
 ```
 
@@ -190,10 +190,10 @@ All upstream flags (`--no-lint`, `--no-dead-code`, `--diff`, `--score`, `--proje
 
 ### CLI options added by this fork
 
-| Flag                  | Behavior                                                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `--hide-branding`     | Suppress the ASCII branding and emit a clean HTML report tagged with the `full` thread marker. Scans the whole repo.              |
-| `--hide-branding-pr`  | Same clean output, tagged with the `pr` thread marker, and forces diff mode so only files changed on the current branch are scanned. |
+| Flag                 | Behavior                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `--hide-branding`    | Suppress the ASCII branding and emit a clean HTML report tagged with the `full` thread marker. Scans the whole repo.                 |
+| `--hide-branding-pr` | Same clean output, tagged with the `pr` thread marker, and forces diff mode so only files changed on the current branch are scanned. |
 
 ## Repository layout
 

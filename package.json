@@ -1,8 +1,8 @@
 {
   "name": "react-doctor-rewritten",
-  "private": false,
-  "homepage": "https://github.com/Ticass/react-doctor#readme",
   "version": "1.0.0",
+  "private": true,
+  "homepage": "https://github.com/Ticass/react-doctor#readme",
   "bugs": {
     "url": "https://github.com/Ticass/react-doctor/issues"
   },
@@ -10,6 +10,9 @@
     "type": "git",
     "url": "git+https://github.com/Ticass/react-doctor.git"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "pnpm --filter react-doctor-rewritten run dev",
     "build": "pnpm --filter react-doctor-rewritten run build",
@@ -20,7 +23,7 @@
     "format:check": "oxfmt --check",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "pnpm build && changeset publish"
+    "release": "pnpm --filter react-doctor-rewritten exec npm version patch --no-git-tag-version && pnpm build && pnpm --filter react-doctor-rewritten publish --access public --no-git-checks"
   },
   "dependencies": {
     "commander": "^14.0.3",
@@ -37,8 +40,5 @@
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
   },
-  "packageManager": "pnpm@10.29.1",
-  "workspaces": [
-    "packages/*"
-  ]
+  "packageManager": "pnpm@10.29.1"
 }
