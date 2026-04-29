@@ -174,8 +174,7 @@ export const noUncontrolledInput: Rule = {
         const args = node.init.arguments ?? [];
         // useState() and useState(undefined) both produce an undefined initial value
         const startsUndefined =
-          args.length === 0 ||
-          (args[0]?.type === "Identifier" && args[0].name === "undefined");
+          args.length === 0 || (args[0]?.type === "Identifier" && args[0].name === "undefined");
         if (startsUndefined) undefinedStateVars.add(stateElement.name);
       },
 
