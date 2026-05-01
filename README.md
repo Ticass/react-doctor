@@ -183,7 +183,7 @@ jobs:
           ARTIFACT_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 ```
 
-```
+```js
 const fs = require("fs");
 
 const MAX_COMMENT_LENGTH = 60000;
