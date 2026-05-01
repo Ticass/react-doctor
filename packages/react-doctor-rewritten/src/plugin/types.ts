@@ -1,4 +1,4 @@
-export interface ReportDescriptor {
+interface ReportDescriptor {
   node: EsTreeNode;
   message: string;
 }
@@ -24,4 +24,10 @@ export interface RulePlugin {
 export interface EsTreeNode {
   type: string;
   [key: string]: any;
+}
+
+export interface ParsedRgb {
+  red: number;
+  green: number;
+  blue: number;
 }
