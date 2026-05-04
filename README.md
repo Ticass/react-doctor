@@ -183,7 +183,7 @@ jobs:
           ARTIFACT_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 ```
 
-```
+```js
 const fs = require("fs");
 
 const MAX_COMMENT_LENGTH = 60000;
@@ -251,6 +251,7 @@ module.exports = async function ({ github, context, core }) {
   }
 };
 ```
+
 
 `fetch-depth: 0` is required so `--hide-branding-pr` can compute the diff against the base branch.
 
