@@ -65,6 +65,7 @@ const FRAMEWORK_DISPLAY_NAMES: Record<Framework, string> = {
   gatsby: "Gatsby",
   expo: "Expo",
   "react-native": "React Native",
+  "tanstack-start": "TanStack Start",
   unknown: "React",
 };
 

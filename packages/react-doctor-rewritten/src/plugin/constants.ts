@@ -4,8 +4,13 @@ export const RELATED_USE_STATE_THRESHOLD = 5;
 export const DEEP_NESTING_THRESHOLD = 3;
 export const DUPLICATE_STORAGE_READ_THRESHOLD = 2;
 export const SEQUENTIAL_AWAIT_THRESHOLD = 3;
-export const SECRET_MIN_LENGTH_CHARS = 8;
-export const AUTH_CHECK_LOOKAHEAD_STATEMENTS = 3;
+export const PROPERTY_ACCESS_REPEAT_THRESHOLD = 3;
+export const BOOLEAN_PROP_THRESHOLD = 4;
+export const RENDER_PROP_PROLIFERATION_THRESHOLD = 3;
+// Real-world API keys, tokens, and credentials are 24+ chars. 8 chars produced
+// many false positives on UI strings ("loading...", short captions, etc.).
+export const SECRET_MIN_LENGTH_CHARS = 24;
+export const AUTH_CHECK_LOOKAHEAD_STATEMENTS = 10;
 
 export const LAYOUT_PROPERTIES = new Set([
   "width",
@@ -55,8 +60,8 @@ export const HEAVY_LIBRARIES = new Set([
   "draft-js",
 ]);
 
-export const FETCH_CALLEE_NAMES = new Set(["fetch"]);
-export const FETCH_MEMBER_OBJECTS = new Set(["axios", "ky", "got"]);
+export const FETCH_CALLEE_NAMES = new Set(["fetch", "ky", "got", "wretch", "ofetch"]);
+export const FETCH_MEMBER_OBJECTS = new Set(["axios", "ky", "got", "ofetch", "wretch", "request"]);
 export const INDEX_PARAMETER_NAMES = new Set(["index", "idx", "i"]);
 export const BARREL_INDEX_SUFFIXES = [
   "/index",
@@ -172,6 +177,80 @@ export const SECRET_FALSE_POSITIVE_SUFFIXES = new Set([
 
 export const LOADING_STATE_PATTERN = /^(?:isLoading|isPending)$/;
 
+export const TANSTACK_ROUTE_FILE_PATTERN = /\/routes\//;
+export const TANSTACK_ROOT_ROUTE_FILE_PATTERN = /__root\.(tsx?|jsx?)$/;
+
+export const TANSTACK_ROUTE_PROPERTY_ORDER = [
+  "params",
+  "validateSearch",
+  "loaderDeps",
+  "search.middlewares",
+  "ssr",
+  "context",
+  "beforeLoad",
+  "loader",
+  "onEnter",
+  "onStay",
+  "onLeave",
+  "head",
+  "scripts",
+  "headers",
+  "remountDeps",
+];
+
+export const TANSTACK_ROUTE_CREATION_FUNCTIONS = new Set([
+  "createFileRoute",
+  "createRoute",
+  "createRootRoute",
+  "createRootRouteWithContext",
+]);
+
+export const TANSTACK_SERVER_FN_NAMES = new Set(["createServerFn"]);
+
+export const TANSTACK_MIDDLEWARE_METHOD_ORDER = [
+  "middleware",
+  "inputValidator",
+  "client",
+  "server",
+  "handler",
+];
+
+export const TANSTACK_REDIRECT_FUNCTIONS = new Set(["redirect", "notFound"]);
+
+export const TANSTACK_SERVER_FN_FILE_PATTERN = /\.functions(\.[jt]sx?)?$/;
+
+export const SEQUENTIAL_AWAIT_THRESHOLD_FOR_LOADER = 2;
+
+export const TANSTACK_QUERY_HOOKS = new Set([
+  "useQuery",
+  "useInfiniteQuery",
+  "useSuspenseQuery",
+  "useSuspenseInfiniteQuery",
+]);
+
+export const TANSTACK_MUTATION_HOOKS = new Set(["useMutation"]);
+
+export const TANSTACK_QUERY_CLIENT_CLASS = "QueryClient";
+
+// Every queryClient method that legitimately keeps the cache in sync
+// after a mutation. `query-mutation-missing-invalidation` looks for ANY
+// of these inside `onSuccess` (etc.); flagging only `invalidateQueries`
+// produced false positives on `setQueryData`, `resetQueries`, and so on.
+export const QUERY_CACHE_UPDATE_METHODS = new Set([
+  "invalidateQueries",
+  "setQueryData",
+  "setQueriesData",
+  "resetQueries",
+  "refetchQueries",
+  "removeQueries",
+  "cancelQueries",
+  "clear",
+]);
+
+export const STABLE_HOOK_WRAPPERS = new Set(["useState", "useMemo", "useRef"]);
+
+export const SCRIPT_LOADING_ATTRIBUTES = new Set(["defer", "async"]);
+
 export const GENERIC_EVENT_SUFFIXES = new Set(["Click", "Change", "Input", "Blur", "Focus"]);
 
 export const TRIVIAL_INITIALIZER_NAMES = new Set([
@@ -187,18 +266,16 @@ export const TRIVIAL_INITIALIZER_NAMES = new Set([
 export const SETTER_PATTERN = /^set[A-Z]/;
 export const RENDER_FUNCTION_PATTERN = /^render[A-Z]/;
 export const UPPERCASE_PATTERN = /^[A-Z]/;
-export const PAGE_FILE_PATTERN = /\/page\.(tsx?|jsx?)$/;
-export const PAGE_OR_LAYOUT_FILE_PATTERN = /\/(page|layout)\.(tsx?|jsx?)$/;
+export const PAGE_FILE_PATTERN = /[\\/]page\.(tsx?|jsx?)$/;
+export const PAGE_OR_LAYOUT_FILE_PATTERN = /[\\/](page|layout)\.(tsx?|jsx?)$/;
 
 export const INTERNAL_PAGE_PATH_PATTERN =
   /\/(?:(?:\((?:dashboard|admin|settings|account|internal|manage|console|portal|auth|onboarding|app|ee|protected)\))|(?:dashboard|admin|settings|account|internal|manage|console|portal))\//i;
 
 export const TEST_FILE_PATTERN = /\.(?:test|spec|stories)\.[tj]sx?$/;
-export const OG_ROUTE_PATTERN = /\/og\b/i;
+export const OG_ROUTE_PATTERN = /[\\/]og\b/i;
 
 export const PAGES_DIRECTORY_PATTERN = /\/pages\//;
-export const SERVER_ACTION_FILE_PATTERN = /actions?\.(tsx?|jsx?)$/;
-export const SERVER_ACTION_DIRECTORY_PATTERN = /\/actions\//;
 
 export const NEXTJS_NAVIGATION_FUNCTIONS = new Set([
   "redirect",
@@ -218,9 +295,9 @@ export const EXECUTABLE_SCRIPT_TYPES = new Set([
   "module",
 ]);
 
-export const APP_DIRECTORY_PATTERN = /\/app\//;
+export const APP_DIRECTORY_PATTERN = /[\\/]app[\\/]/;
 
-export const ROUTE_HANDLER_FILE_PATTERN = /\/route\.(tsx?|jsx?)$/;
+export const ROUTE_HANDLER_FILE_PATTERN = /[\\/]route\.(tsx?|jsx?)$/;
 
 export const MUTATION_METHOD_NAMES = new Set([
   "create",
@@ -237,19 +314,6 @@ export const MUTATION_METHOD_NAMES = new Set([
 
 export const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
-export const MUTATING_ROUTE_SEGMENTS = new Set([
-  "logout",
-  "log-out",
-  "signout",
-  "sign-out",
-  "unsubscribe",
-  "delete",
-  "remove",
-  "revoke",
-  "cancel",
-  "deactivate",
-]);
-
 export const MUTATING_ARRAY_METHODS = new Set([
   "push",
   "pop",
@@ -264,6 +328,19 @@ export const MUTATING_ARRAY_METHODS = new Set([
 
 export const CONTROLLED_INPUT_ELEMENTS = new Set(["input", "textarea", "select"]);
 
+export const MUTATING_ROUTE_SEGMENTS = new Set([
+  "logout",
+  "log-out",
+  "signout",
+  "sign-out",
+  "unsubscribe",
+  "delete",
+  "remove",
+  "revoke",
+  "cancel",
+  "deactivate",
+]);
+
 export const EFFECT_HOOK_NAMES = new Set(["useEffect", "useLayoutEffect"]);
 export const HOOKS_WITH_DEPS = new Set(["useEffect", "useLayoutEffect", "useMemo", "useCallback"]);
 export const CHAINABLE_ITERATION_METHODS = new Set(["map", "filter", "forEach", "flatMap"]);
@@ -276,7 +353,32 @@ export const MOTION_LIBRARY_PACKAGES = new Set(["framer-motion", "motion"]);
 
 export const RAW_TEXT_PREVIEW_MAX_CHARS = 30;
 
-export const REACT_NATIVE_TEXT_COMPONENTS = new Set(["Text", "TextInput"]);
+export const REACT_NATIVE_TEXT_COMPONENTS = new Set([
+  "Text",
+  "TextInput",
+  "Typography",
+  "Paragraph",
+  "Span",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+]);
+
+export const REACT_NATIVE_TEXT_COMPONENT_KEYWORDS = new Set([
+  "Text",
+  "Title",
+  "Label",
+  "Heading",
+  "Caption",
+  "Subtitle",
+  "Typography",
+  "Paragraph",
+  "Description",
+  "Body",
+]);
 
 export const DEPRECATED_RN_MODULE_REPLACEMENTS: Record<string, string> = {
   AsyncStorage: "@react-native-async-storage/async-storage",
@@ -318,3 +420,27 @@ export const LEGACY_SHADOW_STYLE_PROPERTIES = new Set([
   "shadowRadius",
   "elevation",
 ]);
+
+export const BOUNCE_ANIMATION_NAMES = new Set(["bounce", "elastic", "wobble", "jiggle", "spring"]);
+
+export const Z_INDEX_ABSURD_THRESHOLD = 100;
+
+export const INLINE_STYLE_PROPERTY_THRESHOLD = 8;
+
+export const SIDE_TAB_BORDER_WIDTH_WITHOUT_RADIUS_PX = 3;
+
+export const SIDE_TAB_BORDER_WIDTH_WITH_RADIUS_PX = 1;
+
+export const SIDE_TAB_TAILWIND_WIDTH_WITHOUT_RADIUS = 4;
+
+export const DARK_GLOW_BLUR_THRESHOLD_PX = 4;
+
+export const DARK_BACKGROUND_CHANNEL_MAX = 35;
+
+export const COLOR_CHROMA_THRESHOLD = 30;
+
+export const TINY_TEXT_THRESHOLD_PX = 12;
+
+export const WIDE_TRACKING_THRESHOLD_EM = 0.05;
+
+export const LONG_TRANSITION_DURATION_THRESHOLD_MS = 1000;

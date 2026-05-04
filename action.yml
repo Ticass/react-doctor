@@ -59,7 +59,7 @@ runs:
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         GITHUB_ACTION_PATH: ${{ github.action_path }}
       run: |
-        DOCTOR="node $GITHUB_ACTION_PATH/packages/react-doctor/dist/cli.js"
+        DOCTOR="node $GITHUB_ACTION_PATH/packages/react-doctor-rewritten/dist/cli.js"
 
         FLAGS="--fail-on $INPUT_FAIL_ON"
         if [ "$INPUT_VERBOSE" = "true" ]; then FLAGS="$FLAGS --verbose"; fi
@@ -79,7 +79,7 @@ runs:
         INPUT_DIRECTORY: ${{ inputs.directory }}
         GITHUB_ACTION_PATH: ${{ github.action_path }}
       run: |
-        DOCTOR="node $GITHUB_ACTION_PATH/packages/react-doctor/dist/cli.js"
+        DOCTOR="node $GITHUB_ACTION_PATH/packages/react-doctor-rewritten/dist/cli.js"
         SCORE=$($DOCTOR "$INPUT_DIRECTORY" --score 2>/dev/null | tail -1 | tr -d '[:space:]')
         if [[ -n "$SCORE" && "$SCORE" =~ ^[0-9]+$ ]]; then
           echo "score=$SCORE" >> "$GITHUB_OUTPUT"

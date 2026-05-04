@@ -105,17 +105,64 @@ export const nextjsNoAElement: Rule = {
   }),
 };
 
+// HACK: file-level proxy for "is the developer aware of the Suspense
+// requirement?". Cross-file ancestor analysis would catch every case
+// correctly but isn't tractable in a per-file lint pass; the official
+// `@next/next/no-use-search-params-without-suspense-bailout` rule uses
+// the same heuristic. If <Suspense> appears anywhere in the file (as a
+// JSX element OR a named import from React) we trust the developer is
+// rendering the useSearchParams() consumer behind it.
+//
+// KNOWN LIMITATION (false negative): a file that imports `Suspense`
+// from React for an unrelated reason (re-export, type reference, etc.)
+// silences ALL `useSearchParams()` reports in that file. We accept the
+// trade-off because a false POSITIVE here is much louder for end users
+// than a false negative.
+const fileMentionsSuspense = (programNode: EsTreeNode): boolean => {
+  let didSee = false;
+  walkAst(programNode, (child: EsTreeNode) => {
+    if (didSee) return false;
+    if (
+      child.type === "JSXOpeningElement" &&
+      child.name?.type === "JSXIdentifier" &&
+      child.name.name === "Suspense"
+    ) {
+      didSee = true;
+      return false;
+    }
+    if (child.type === "ImportDeclaration" && child.source?.value === "react") {
+      const importsSuspense = (child.specifiers ?? []).some(
+        (specifier: EsTreeNode) =>
+          specifier.type === "ImportSpecifier" && specifier.imported?.name === "Suspense",
+      );
+      if (importsSuspense) {
+        didSee = true;
+        return false;
+      }
+    }
+  });
+  return didSee;
+};
+
 export const nextjsNoUseSearchParamsWithoutSuspense: Rule = {
-  create: (context: RuleContext) => ({
-    CallExpression(node: EsTreeNode) {
-      if (!isHookCall(node, "useSearchParams")) return;
-      context.report({
-        node,
-        message:
-          "useSearchParams() requires a <Suspense> boundary — without one, the entire page bails out to client-side rendering",
-      });
-    },
-  }),
+  create: (context: RuleContext) => {
+    let hasSuspenseInFile = false;
+
+    return {
+      Program(programNode: EsTreeNode) {
+        hasSuspenseInFile = fileMentionsSuspense(programNode);
+      },
+      CallExpression(node: EsTreeNode) {
+        if (hasSuspenseInFile) return;
+        if (!isHookCall(node, "useSearchParams")) return;
+        context.report({
+          node,
+          message:
+            "useSearchParams() requires a <Suspense> boundary — without one, the entire page bails out to client-side rendering",
+        });
+      },
+    };
+  },
 };
 
 export const nextjsNoClientFetchForServerData: Rule = {
@@ -181,44 +228,60 @@ export const nextjsMissingMetadata: Rule = {
   }),
 };
 
-const isClientSideRedirect = (node: EsTreeNode): boolean => {
+const describeClientSideNavigation = (
+  node: EsTreeNode,
+  isPagesRouterFile: boolean,
+): string | null => {
+  const redirectGuidance = isPagesRouterFile
+    ? "handle navigation in an event handler, getServerSideProps redirect, or middleware"
+    : "use redirect() from next/navigation or handle navigation in an event handler";
+
   if (node.type === "CallExpression" && node.callee?.type === "MemberExpression") {
     const objectName = node.callee.object?.type === "Identifier" ? node.callee.object.name : null;
-    if (
-      objectName === "router" &&
-      (isMemberProperty(node.callee, "push") || isMemberProperty(node.callee, "replace"))
-    )
-      return true;
+    const methodName =
+      node.callee.property?.type === "Identifier" ? node.callee.property.name : null;
+    if (objectName === "router" && (methodName === "push" || methodName === "replace")) {
+      return `router.${methodName}() in useEffect — ${redirectGuidance}`;
+    }
   }
 
   if (node.type === "AssignmentExpression" && node.left?.type === "MemberExpression") {
     const objectName = node.left.object?.type === "Identifier" ? node.left.object.name : null;
     const propertyName = node.left.property?.type === "Identifier" ? node.left.property.name : null;
-    if (objectName === "window" && propertyName === "location") return true;
-    if (objectName === "location" && propertyName === "href") return true;
+    if (objectName === "window" && propertyName === "location") {
+      return `window.location assignment in useEffect — ${redirectGuidance}`;
+    }
+    if (objectName === "location" && propertyName === "href") {
+      return `location.href assignment in useEffect — ${redirectGuidance}`;
+    }
   }
 
-  return false;
+  return null;
 };
 
 export const nextjsNoClientSideRedirect: Rule = {
-  create: (context: RuleContext) => ({
-    CallExpression(node: EsTreeNode) {
-      if (!isHookCall(node, EFFECT_HOOK_NAMES)) return;
-      const callback = getEffectCallback(node);
-      if (!callback) return;
+  create: (context: RuleContext) => {
+    const filename = context.getFilename?.() ?? "";
+    const isPagesRouterFile = PAGES_DIRECTORY_PATTERN.test(filename);
 
-      walkAst(callback, (child: EsTreeNode) => {
-        if (isClientSideRedirect(child)) {
-          context.report({
-            node: child,
-            message:
-              "Client-side redirect in useEffect — use redirect() from next/navigation or handle in middleware instead",
-          });
-        }
-      });
-    },
-  }),
+    return {
+      CallExpression(node: EsTreeNode) {
+        if (!isHookCall(node, EFFECT_HOOK_NAMES)) return;
+        const callback = getEffectCallback(node);
+        if (!callback) return;
+
+        walkAst(callback, (child: EsTreeNode) => {
+          const navigationDescription = describeClientSideNavigation(child, isPagesRouterFile);
+          if (navigationDescription) {
+            context.report({
+              node: child,
+              message: navigationDescription,
+            });
+          }
+        });
+      },
+    };
+  },
 };
 
 export const nextjsNoRedirectInTryCatch: Rule = {
@@ -402,15 +465,16 @@ const getExportedGetHandlerBody = (node: EsTreeNode): EsTreeNode | null => {
   }
 
   if (declaration.type === "VariableDeclaration") {
-    const declarator = declaration.declarations?.[0];
-    if (
-      declarator?.id?.type === "Identifier" &&
-      declarator.id.name === "GET" &&
-      declarator.init &&
-      (declarator.init.type === "ArrowFunctionExpression" ||
-        declarator.init.type === "FunctionExpression")
-    ) {
-      return declarator.init.body;
+    for (const declarator of declaration.declarations ?? []) {
+      if (
+        declarator?.id?.type === "Identifier" &&
+        declarator.id.name === "GET" &&
+        declarator.init &&
+        (declarator.init.type === "ArrowFunctionExpression" ||
+          declarator.init.type === "FunctionExpression")
+      ) {
+        return declarator.init.body;
+      }
     }
   }
 

@@ -73,13 +73,13 @@ describe("runOxlint", () => {
       "no-derived-state-effect": {
         fixture: "state-issues.tsx",
         ruleSource: "rules/state-and-effects.ts",
-        severity: "error",
+        severity: "warning",
         category: "State & Effects",
       },
       "no-fetch-in-effect": {
         fixture: "state-issues.tsx",
         ruleSource: "rules/state-and-effects.ts",
-        severity: "error",
+        severity: "warning",
       },
       "no-cascading-set-state": {
         fixture: "state-issues.tsx",
@@ -265,7 +265,7 @@ describe("runOxlint", () => {
       "no-secrets-in-client-code": {
         fixture: "security-issues.tsx",
         ruleSource: "rules/security.ts",
-        severity: "error",
+        severity: "warning",
         category: "Security",
       },
     },

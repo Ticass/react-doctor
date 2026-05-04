@@ -395,7 +395,12 @@ export const runOxlint = async (
 
   const configPath = path.join(os.tmpdir(), `react-doctor-oxlintrc-${process.pid}.json`);
   const pluginPath = resolvePluginPath();
-  const config = createOxlintConfig({ pluginPath, framework, hasReactCompiler });
+  const config = createOxlintConfig({
+    pluginPath,
+    framework,
+    hasReactCompiler,
+    hasTanStackQuery: false,
+  });
   const restoreDisableDirectives = neutralizeDisableDirectives(rootDirectory);
 
   try {
