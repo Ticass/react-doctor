@@ -47,8 +47,15 @@ const EXPO_APP_CONFIG_FILENAMES = ["app.json", "app.config.js", "app.config.ts"]
 
 const REACT_COMPILER_CONFIG_PATTERN = /react-compiler|reactCompiler/;
 
+const TANSTACK_QUERY_PACKAGES = new Set([
+  "@tanstack/react-query",
+  "@tanstack/query-core",
+  "react-query",
+]);
+
 const FRAMEWORK_PACKAGES: Record<string, Framework> = {
   next: "nextjs",
+  "@tanstack/react-start": "tanstack-start",
   vite: "vite",
   "react-scripts": "cra",
   "@remix-run/react": "remix",
@@ -433,6 +440,10 @@ export const discoverProject = (directory: string): ProjectInfo => {
   const sourceFileCount = countSourceFiles(directory);
 
   const hasReactCompiler = detectReactCompiler(directory, packageJson);
+  const allDependencies = collectAllDependencies(packageJson);
+  const hasTanStackQuery = Object.keys(allDependencies).some((packageName) =>
+    TANSTACK_QUERY_PACKAGES.has(packageName),
+  );
 
   return {
     rootDirectory: directory,
@@ -441,6 +452,7 @@ export const discoverProject = (directory: string): ProjectInfo => {
     framework,
     hasTypeScript,
     hasReactCompiler,
+    hasTanStackQuery,
     sourceFileCount,
   };
 };

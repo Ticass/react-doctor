@@ -388,6 +388,7 @@ export const runOxlint = async (
   hasReactCompiler: boolean,
   includePaths?: string[],
   nodeBinaryPath: string = process.execPath,
+  hasTanStackQuery: boolean = false,
 ): Promise<Diagnostic[]> => {
   if (includePaths !== undefined && includePaths.length === 0) {
     return [];
@@ -399,7 +400,7 @@ export const runOxlint = async (
     pluginPath,
     framework,
     hasReactCompiler,
-    hasTanStackQuery: false,
+    hasTanStackQuery,
   });
   const restoreDisableDirectives = neutralizeDisableDirectives(rootDirectory);
 

@@ -18,6 +18,7 @@ export interface ProjectInfo {
   framework: Framework;
   hasTypeScript: boolean;
   hasReactCompiler: boolean;
+  hasTanStackQuery: boolean;
   sourceFileCount: number;
 }
 
