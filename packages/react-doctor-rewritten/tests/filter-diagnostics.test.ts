@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Diagnostic, ReactDoctorConfig } from "../src/types.js";
 import { filterIgnoredDiagnostics } from "../src/utils/filter-diagnostics.js";
+import { createNodeReadFileLinesSync } from "../src/utils/read-file-lines-node.js";
+
+const TEST_ROOT_DIRECTORY = "/home/user/project";
+const testReadFileLines = createNodeReadFileLinesSync(TEST_ROOT_DIRECTORY);
 
 const createDiagnostic = (overrides: Partial<Diagnostic> = {}): Diagnostic => ({
   filePath: "src/app.tsx",
@@ -19,7 +23,9 @@ describe("filterIgnoredDiagnostics", () => {
   it("returns all diagnostics when config has no ignore rules", () => {
     const diagnostics = [createDiagnostic()];
     const config: ReactDoctorConfig = {};
-    expect(filterIgnoredDiagnostics(diagnostics, config)).toEqual(diagnostics);
+    expect(
+      filterIgnoredDiagnostics(diagnostics, config, TEST_ROOT_DIRECTORY, testReadFileLines),
+    ).toEqual(diagnostics);
   });
 
   it("filters diagnostics matching ignored rules", () => {
@@ -34,7 +40,12 @@ describe("filterIgnoredDiagnostics", () => {
       },
     };
 
-    const filtered = filterIgnoredDiagnostics(diagnostics, config);
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      TEST_ROOT_DIRECTORY,
+      testReadFileLines,
+    );
     expect(filtered).toHaveLength(1);
     expect(filtered[0].rule).toBe("no-giant-component");
   });
@@ -51,7 +62,12 @@ describe("filterIgnoredDiagnostics", () => {
       },
     };
 
-    const filtered = filterIgnoredDiagnostics(diagnostics, config);
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      TEST_ROOT_DIRECTORY,
+      testReadFileLines,
+    );
     expect(filtered).toHaveLength(1);
     expect(filtered[0].filePath).toBe("src/components/Button.tsx");
   });
@@ -73,7 +89,12 @@ describe("filterIgnoredDiagnostics", () => {
       },
     };
 
-    const filtered = filterIgnoredDiagnostics(diagnostics, config);
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      TEST_ROOT_DIRECTORY,
+      testReadFileLines,
+    );
     expect(filtered).toHaveLength(1);
     expect(filtered[0].rule).toBe("no-giant-component");
   });
@@ -90,7 +111,12 @@ describe("filterIgnoredDiagnostics", () => {
       },
     };
 
-    const filtered = filterIgnoredDiagnostics(diagnostics, config);
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      TEST_ROOT_DIRECTORY,
+      testReadFileLines,
+    );
     expect(filtered).toHaveLength(2);
   });
 
@@ -106,9 +132,43 @@ describe("filterIgnoredDiagnostics", () => {
       },
     };
 
-    const filtered = filterIgnoredDiagnostics(diagnostics, config);
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      TEST_ROOT_DIRECTORY,
+      testReadFileLines,
+    );
     expect(filtered).toHaveLength(1);
     expect(filtered[0].filePath).toBe("./resources/js/pages/Home.tsx");
+  });
+
+  it("filters absolute file paths against relative patterns", () => {
+    const rootDirectory = "/home/user/project";
+    const diagnostics = [
+      createDiagnostic({
+        filePath: "/home/user/project/resources/js/components/ui/Button.tsx",
+      }),
+      createDiagnostic({
+        filePath: "/home/user/project/resources/js/marketing/Hero.tsx",
+      }),
+      createDiagnostic({
+        filePath: "/home/user/project/resources/js/pages/Home.tsx",
+      }),
+    ];
+    const config: ReactDoctorConfig = {
+      ignore: {
+        files: ["/resources/js/components/ui/**", "/resources/js/marketing/**"],
+      },
+    };
+
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      rootDirectory,
+      createNodeReadFileLinesSync(rootDirectory),
+    );
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].filePath).toContain("pages/Home.tsx");
   });
 
   it("handles knip rule identifiers", () => {
@@ -123,7 +183,12 @@ describe("filterIgnoredDiagnostics", () => {
       },
     };
 
-    const filtered = filterIgnoredDiagnostics(diagnostics, config);
+    const filtered = filterIgnoredDiagnostics(
+      diagnostics,
+      config,
+      TEST_ROOT_DIRECTORY,
+      testReadFileLines,
+    );
     expect(filtered).toHaveLength(1);
     expect(filtered[0].rule).toBe("files");
   });

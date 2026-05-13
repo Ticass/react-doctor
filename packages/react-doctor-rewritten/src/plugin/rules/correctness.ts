@@ -1,5 +1,11 @@
-import { CONTROLLED_INPUT_ELEMENTS, INDEX_PARAMETER_NAMES } from "../constants.js";
-import { findJsxAttribute, hasJsxAttribute, isHookCall, walkAst } from "../helpers.js";
+import { INDEX_PARAMETER_NAMES } from "../constants.js";
+import {
+  findJsxAttribute,
+  isComponentAssignment,
+  isHookCall,
+  isUppercaseName,
+  walkAst,
+} from "../helpers.js";
 import type { EsTreeNode, Rule, RuleContext } from "../types.js";
 
 const STRING_COERCION_FUNCTIONS = new Set(["String", "Number"]);
@@ -268,61 +274,143 @@ export const renderingSvgPrecision: Rule = {
   }),
 };
 
+const UNCONTROLLED_INPUT_TAGS = new Set(["input", "textarea", "select"]);
+
+// HACK: <input type="checkbox"> / "radio" use the `checked` prop to be
+// controlled; `value` is just the form-submission token. <input
+// type="hidden"> never needs onChange — React's runtime warning skips
+// it for the same reason. Limiting our `value`-needs-onChange check to
+// non-hidden, non-checkable inputs keeps us aligned with React's own
+// rules.
+const VALUE_BYPASS_INPUT_TYPES = new Set(["hidden", "checkbox", "radio"]);
+
+const VALUE_PARTNER_ATTRIBUTES = ["onChange", "readOnly"];
+
+const getInputTypeLiteral = (attributes: EsTreeNode[]): string | null => {
+  const typeAttribute = findJsxAttribute(attributes, "type");
+  if (!typeAttribute || typeAttribute.value?.type !== "Literal") return null;
+  const value = typeAttribute.value.value;
+  return typeof value === "string" ? value : null;
+};
+
+const isUseStateUndefinedInitializer = (init: EsTreeNode | null | undefined): boolean => {
+  if (!init || init.type !== "CallExpression") return false;
+  if (!isHookCall(init, "useState")) return false;
+  const args = init.arguments ?? [];
+  if (args.length === 0) return true;
+  const firstArgument = args[0];
+  return firstArgument?.type === "Identifier" && firstArgument.name === "undefined";
+};
+
+const collectUndefinedInitialStateNames = (componentBody: EsTreeNode): Set<string> => {
+  const stateNames = new Set<string>();
+  if (componentBody?.type !== "BlockStatement") return stateNames;
+  for (const statement of componentBody.body ?? []) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declarator of statement.declarations ?? []) {
+      if (declarator.id?.type !== "ArrayPattern") continue;
+      const valueElement = declarator.id.elements?.[0];
+      if (valueElement?.type !== "Identifier") continue;
+      if (!isUseStateUndefinedInitializer(declarator.init)) continue;
+      stateNames.add(valueElement.name);
+    }
+  }
+  return stateNames;
+};
+
+const hasJsxSpreadAttribute = (attributes: EsTreeNode[]): boolean =>
+  attributes.some((attribute) => attribute.type === "JSXSpreadAttribute");
+
+// HACK: catches three uncontrolled-input mistakes that React's static
+// rule set misses:
+//   1. `value={...}` without `onChange` / `readOnly` — React renders
+//      this as a silently read-only field at runtime.
+//   2. `value` AND `defaultValue` set together — React ignores
+//      defaultValue on a controlled input.
+//   3. `value={state}` where `state` was initialized as undefined
+//      (e.g. `useState()` with no argument) — the input starts
+//      uncontrolled and flips to controlled on first set, which React
+//      logs a runtime warning for.
+//
+// Bails when a spread attribute (`{...rest}`) is present — react-hook-form's
+// `register()`, Headless UI, Radix, etc. routinely supply `onChange` /
+// `defaultValue` via spread, and we can't see through it without scope
+// analysis. False-negative > false-positive on a heavily used pattern.
 export const noUncontrolledInput: Rule = {
   create: (context: RuleContext) => {
-    // Tracks state variables initialized as undefined so we can detect the
-    // uncontrolled→controlled flip: useState(undefined) then used as value={x}.
-    const undefinedStateVars = new Set<string>();
+    const checkComponent = (componentBody: EsTreeNode | null | undefined): void => {
+      if (!componentBody) return;
+      // Concise arrow bodies (`() => <input ... />`) skip the BlockStatement
+      // wrapper; walk the JSX expression directly. There are no useState
+      // declarations to collect for the undefined-initializer check, so an
+      // empty set is correct.
+      const undefinedInitialStateNames =
+        componentBody.type === "BlockStatement"
+          ? collectUndefinedInitialStateNames(componentBody)
+          : new Set<string>();
+
+      walkAst(componentBody, (child: EsTreeNode) => {
+        if (child.type !== "JSXOpeningElement") return;
+        if (child.name?.type !== "JSXIdentifier") return;
+        const tagName = child.name.name;
+        if (!UNCONTROLLED_INPUT_TAGS.has(tagName)) return;
+
+        const attributes = child.attributes ?? [];
+        if (hasJsxSpreadAttribute(attributes)) return;
+
+        const valueAttribute = findJsxAttribute(attributes, "value");
+        if (!valueAttribute) return;
+
+        if (tagName === "input") {
+          const inputType = getInputTypeLiteral(attributes);
+          if (inputType !== null && VALUE_BYPASS_INPUT_TYPES.has(inputType)) return;
+        }
+
+        const hasAllowedPartner = VALUE_PARTNER_ATTRIBUTES.some((partnerAttributeName) =>
+          findJsxAttribute(attributes, partnerAttributeName),
+        );
+
+        if (
+          valueAttribute.value?.type === "JSXExpressionContainer" &&
+          valueAttribute.value.expression?.type === "Identifier" &&
+          undefinedInitialStateNames.has(valueAttribute.value.expression.name)
+        ) {
+          const stateName = valueAttribute.value.expression.name;
+          const partnerHint = hasAllowedPartner
+            ? "Initialize useState with an explicit value"
+            : "Initialize useState with an explicit value AND add onChange (or readOnly)";
+          context.report({
+            node: child,
+            message: `<${tagName} value={${stateName}}> — "${stateName}" is initialized as undefined (uncontrolled), then becomes controlled on first set; React warns about this flip. ${partnerHint} (e.g. \`useState("")\`)`,
+          });
+          return;
+        }
+
+        if (findJsxAttribute(attributes, "defaultValue")) {
+          context.report({
+            node: child,
+            message: `<${tagName}> sets both \`value\` and \`defaultValue\` — defaultValue is ignored on a controlled input; remove one`,
+          });
+          return;
+        }
+
+        if (!hasAllowedPartner) {
+          context.report({
+            node: child,
+            message: `<${tagName} value={...}> with no \`onChange\` or \`readOnly\` — React renders this as a silently read-only field`,
+          });
+        }
+      });
+    };
 
     return {
-      VariableDeclarator(node: EsTreeNode) {
-        if (node.id?.type !== "ArrayPattern") return;
-        if (!isHookCall(node.init, "useState")) return;
-        const stateElement = node.id.elements?.[0];
-        if (stateElement?.type !== "Identifier") return;
-        const args = node.init.arguments ?? [];
-        // useState() and useState(undefined) both produce an undefined initial value
-        const startsUndefined =
-          args.length === 0 ||
-          (args[0]?.type === "Identifier" && args[0].name === "undefined");
-        if (startsUndefined) undefinedStateVars.add(stateElement.name);
+      FunctionDeclaration(node: EsTreeNode) {
+        if (!node.id?.name || !isUppercaseName(node.id.name)) return;
+        checkComponent(node.body);
       },
-
-      JSXOpeningElement(node: EsTreeNode) {
-        const elementName = node.name?.type === "JSXIdentifier" ? node.name.name : null;
-        if (!elementName || !CONTROLLED_INPUT_ELEMENTS.has(elementName)) return;
-
-        const attributes = node.attributes ?? [];
-        const valueAttr = findJsxAttribute(attributes, "value");
-        const defaultValueAttr = findJsxAttribute(attributes, "defaultValue");
-        const hasOnChange = hasJsxAttribute(attributes, "onChange");
-        const hasReadOnly = hasJsxAttribute(attributes, "readOnly");
-
-        if (valueAttr && !hasOnChange && !hasReadOnly) {
-          context.report({
-            node: valueAttr,
-            message: `<${elementName} value={...}> without onChange or readOnly — add an onChange handler or use defaultValue for an uncontrolled input`,
-          });
-        }
-
-        // defaultValue is silently ignored on a controlled input
-        if (valueAttr && defaultValueAttr) {
-          context.report({
-            node: defaultValueAttr,
-            message: `<${elementName}> has both value and defaultValue — defaultValue is ignored on controlled inputs, remove it`,
-          });
-        }
-
-        // Detect the undefined→string flip: starts uncontrolled, becomes controlled on first update
-        if (valueAttr?.value?.type === "JSXExpressionContainer") {
-          const expression = valueAttr.value.expression;
-          if (expression?.type === "Identifier" && undefinedStateVars.has(expression.name)) {
-            context.report({
-              node: valueAttr,
-              message: `"${expression.name}" is initialized as undefined — the input starts uncontrolled and switches to controlled on first update, use "" as the initial value instead`,
-            });
-          }
-        }
+      VariableDeclarator(node: EsTreeNode) {
+        if (!isComponentAssignment(node)) return;
+        checkComponent(node.init?.body);
       },
     };
   },

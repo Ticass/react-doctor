@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   MILLISECONDS_PER_SECOND,
+  buildNoReactDependencyError,
   OFFLINE_MESSAGE,
   OXLINT_NODE_REQUIREMENT,
   OXLINT_RECOMMENDED_NODE_MAJOR,
@@ -23,26 +24,29 @@ import type {
   ScanResult,
   ScoreResult,
 } from "./types.js";
+import { buildNoBrandingReport } from "./utils/no-branding-diagnostics.js";
 import { calculateScore, calculateScoreLocally } from "./utils/calculate-score.js";
 import { colorizeByScore } from "./utils/colorize-by-score.js";
-import { combineDiagnostics, computeJsxIncludePaths } from "./utils/combine-diagnostics.js";
+import { combineDiagnostics } from "./utils/combine-diagnostics.js";
+import { computeJsxIncludePaths } from "./utils/jsx-include-paths.js";
 import { discoverProject, formatFrameworkName } from "./utils/discover-project.js";
+import { formatErrorChain } from "./utils/format-error-chain.js";
 import { type FramedLine, createFramedLine, printFramedBox } from "./utils/framed-box.js";
 import { groupBy } from "./utils/group-by.js";
 import { highlighter } from "./utils/highlighter.js";
 import { indentMultilineText } from "./utils/indent-multiline-text.js";
 import { loadConfig } from "./utils/load-config.js";
-import { logger } from "./utils/logger.js";
+import { isLoggerSilent, logger, setLoggerSilent } from "./utils/logger.js";
 import { prompts } from "./utils/prompts.js";
 import {
   installNodeViaNvm,
   isNvmInstalled,
   resolveNodeForOxlint,
 } from "./utils/resolve-compatible-node.js";
-import { buildNoBrandingReport } from "./utils/no-branding-diagnostics.js";
+import { resolveLintIncludePaths } from "./utils/resolve-lint-include-paths.js";
 import { runKnip } from "./utils/run-knip.js";
 import { runOxlint } from "./utils/run-oxlint.js";
-import { spinner } from "./utils/spinner.js";
+import { isSpinnerSilent, setSpinnerSilent, spinner } from "./utils/spinner.js";
 
 interface ScoreBarSegments {
   filledSegment: string;
@@ -103,8 +107,13 @@ const printDiagnostics = (diagnostics: Diagnostic[], isVerbose: boolean): void =
       const fileLines = buildFileLineMap(ruleDiagnostics);
 
       for (const [filePath, lines] of fileLines) {
-        const lineLabel = lines.length > 0 ? `: ${lines.join(", ")}` : "";
-        logger.dim(`    ${filePath}${lineLabel}`);
+        if (lines.length > 0) {
+          for (const line of lines) {
+            logger.dim(`  ${filePath}:${line}`);
+          }
+        } else {
+          logger.dim(`  ${filePath}`);
+        }
       }
     }
 
@@ -138,8 +147,13 @@ const formatRuleSummary = (ruleKey: string, ruleDiagnostics: Diagnostic[]): stri
 
   sections.push("", "Files:");
   for (const [filePath, lines] of fileLines) {
-    const lineLabel = lines.length > 0 ? `: ${lines.join(", ")}` : "";
-    sections.push(`  ${filePath}${lineLabel}`);
+    if (lines.length > 0) {
+      for (const line of lines) {
+        sections.push(`  ${filePath}:${line}`);
+      }
+    } else {
+      sections.push(`  ${filePath}`);
+    }
   }
 
   return sections.join("\n") + "\n";
@@ -147,7 +161,7 @@ const formatRuleSummary = (ruleKey: string, ruleDiagnostics: Diagnostic[]): stri
 
 const writeDiagnosticsDirectory = (diagnostics: Diagnostic[]): string => {
   const outputDirectory = join(tmpdir(), `react-doctor-${randomUUID()}`);
-  mkdirSync(outputDirectory);
+  mkdirSync(outputDirectory, { recursive: true });
 
   const ruleGroups = groupBy(
     diagnostics,
@@ -160,7 +174,7 @@ const writeDiagnosticsDirectory = (diagnostics: Diagnostic[]): string => {
     writeFileSync(join(outputDirectory, fileName), formatRuleSummary(ruleKey, ruleDiagnostics));
   }
 
-  writeFileSync(join(outputDirectory, "diagnostics.json"), JSON.stringify(diagnostics, null, 2));
+  writeFileSync(join(outputDirectory, "diagnostics.json"), JSON.stringify(diagnostics));
 
   return outputDirectory;
 };
@@ -321,14 +335,7 @@ const printSummary = (
   totalSourceFileCount: number,
   noScoreMessage: string,
   isOffline: boolean,
-  noBranding: boolean,
-  noBrandingThread: NoBrandingThread,
 ): void => {
-  if (noBranding) {
-    logger.log(buildNoBrandingReport(diagnostics, scoreResult, noBrandingThread));
-    return;
-  }
-
   const summaryFramedLines = [
     ...buildBrandingLines(scoreResult, noScoreMessage),
     buildCountsSummaryLine(diagnostics, totalSourceFileCount, elapsedMilliseconds),
@@ -352,14 +359,14 @@ const printSummary = (
 
 const resolveOxlintNode = async (
   isLintEnabled: boolean,
-  isScoreOnly: boolean,
+  isQuiet: boolean,
 ): Promise<string | null> => {
   if (!isLintEnabled) return null;
 
   const nodeResolution = resolveNodeForOxlint();
 
   if (nodeResolution) {
-    if (!nodeResolution.isCurrentNode && !isScoreOnly) {
+    if (!nodeResolution.isCurrentNode && !isQuiet) {
       logger.warn(
         `Node ${process.version} is unsupported by oxlint. Using Node ${nodeResolution.version} from nvm.`,
       );
@@ -368,7 +375,7 @@ const resolveOxlintNode = async (
     return nodeResolution.binaryPath;
   }
 
-  if (isScoreOnly) return null;
+  if (isQuiet) return null;
 
   logger.warn(
     `Node ${process.version} is not compatible with oxlint (requires ${OXLINT_NODE_REQUIREMENT}). Lint checks will be skipped.`,
@@ -414,30 +421,33 @@ interface ResolvedScanOptions {
   verbose: boolean;
   scoreOnly: boolean;
   offline: boolean;
+  silent: boolean;
+  includePaths: string[];
+  customRulesOnly: boolean;
+  share: boolean;
+  respectInlineDisables: boolean;
   noBranding: boolean;
   noBrandingThread: NoBrandingThread;
-  includePaths: string[];
 }
-
-const SCAN_DEFAULTS: ResolvedScanOptions = {
-  lint: true,
-  deadCode: true,
-  verbose: false,
-  scoreOnly: false,
-  offline: false,
-  noBranding: false,
-  noBrandingThread: "full",
-  includePaths: [],
-};
 
 const mergeScanOptions = (
   inputOptions: ScanOptions,
   userConfig: ReactDoctorConfig | null,
 ): ResolvedScanOptions => ({
-  ...SCAN_DEFAULTS,
-  ...userConfig,
-  ...inputOptions,
+  lint: inputOptions.lint ?? userConfig?.lint ?? true,
+  deadCode: inputOptions.deadCode ?? userConfig?.deadCode ?? true,
+  verbose: inputOptions.verbose ?? userConfig?.verbose ?? false,
+  scoreOnly: inputOptions.scoreOnly ?? false,
+  offline: inputOptions.offline ?? false,
+  silent: inputOptions.silent ?? false,
   includePaths: inputOptions.includePaths ?? [],
+  customRulesOnly: userConfig?.customRulesOnly ?? false,
+  share: userConfig?.share ?? true,
+  respectInlineDisables:
+    inputOptions.respectInlineDisables ?? userConfig?.respectInlineDisables ?? true,
+  noBranding: inputOptions.noBranding ?? userConfig?.noBranding ?? false,
+  noBrandingThread:
+    inputOptions.noBrandingThread ?? userConfig?.noBrandingThread ?? "full",
 });
 
 const printProjectDetection = (
@@ -445,6 +455,7 @@ const printProjectDetection = (
   userConfig: ReactDoctorConfig | null,
   isDiffMode: boolean,
   includePaths: string[],
+  lintSourceFileCount?: number,
 ): void => {
   const frameworkLabel = formatFrameworkName(projectInfo.framework);
   const languageLabel = projectInfo.hasTypeScript ? "TypeScript" : "JavaScript";
@@ -465,7 +476,9 @@ const printProjectDetection = (
   if (isDiffMode) {
     completeStep(`Scanning ${highlighter.info(`${includePaths.length}`)} changed source files.`);
   } else {
-    completeStep(`Found ${highlighter.info(`${projectInfo.sourceFileCount}`)} source files.`);
+    completeStep(
+      `Found ${highlighter.info(`${lintSourceFileCount ?? projectInfo.sourceFileCount}`)} source files.`,
+    );
   }
 
   if (userConfig) {
@@ -480,49 +493,80 @@ export const scan = async (
   inputOptions: ScanOptions = {},
 ): Promise<ScanResult> => {
   const startTime = performance.now();
-  const projectInfo = discoverProject(directory);
-  const userConfig = loadConfig(directory);
+  const userConfig =
+    inputOptions.configOverride !== undefined ? inputOptions.configOverride : loadConfig(directory);
   const options = mergeScanOptions(inputOptions, userConfig);
+
+  const wasLoggerSilent = isLoggerSilent();
+  const wasSpinnerSilent = isSpinnerSilent();
+  if (options.silent) {
+    setLoggerSilent(true);
+    setSpinnerSilent(true);
+  }
+
+  try {
+    return await runScan(directory, options, userConfig, startTime);
+  } finally {
+    if (options.silent) {
+      setLoggerSilent(wasLoggerSilent);
+      setSpinnerSilent(wasSpinnerSilent);
+    }
+  }
+};
+
+const runScan = async (
+  directory: string,
+  options: ResolvedScanOptions,
+  userConfig: ReactDoctorConfig | null,
+  startTime: number,
+): Promise<ScanResult> => {
+  const projectInfo = discoverProject(directory);
   const { includePaths } = options;
   const isDiffMode = includePaths.length > 0;
 
   if (!projectInfo.reactVersion) {
-    throw new Error("No React dependency found in package.json");
-  }
-
-  if (!options.scoreOnly && !options.noBranding) {
-    printProjectDetection(projectInfo, userConfig, isDiffMode, includePaths);
+    throw new Error(buildNoReactDependencyError(directory));
   }
 
   const jsxIncludePaths = computeJsxIncludePaths(includePaths);
+  const lintIncludePaths = jsxIncludePaths ?? resolveLintIncludePaths(directory, userConfig);
+  const lintSourceFileCount = lintIncludePaths?.length ?? projectInfo.sourceFileCount;
+
+  if (!options.scoreOnly) {
+    printProjectDetection(projectInfo, userConfig, isDiffMode, includePaths, lintSourceFileCount);
+  }
 
   let didLintFail = false;
   let didDeadCodeFail = false;
 
-  const resolvedNodeBinaryPath = await resolveOxlintNode(options.lint, options.scoreOnly);
+  const resolvedNodeBinaryPath = await resolveOxlintNode(
+    options.lint,
+    options.scoreOnly || options.silent,
+  );
   if (options.lint && !resolvedNodeBinaryPath) didLintFail = true;
 
   const lintPromise = resolvedNodeBinaryPath
     ? (async () => {
-        const lintSpinner =
-          options.scoreOnly || options.noBranding ? null : spinner("Running lint checks...").start();
+        const lintSpinner = options.scoreOnly ? null : spinner("Running lint checks...").start();
         try {
-          const lintDiagnostics = await runOxlint(
-            directory,
-            projectInfo.hasTypeScript,
-            projectInfo.framework,
-            projectInfo.hasReactCompiler,
-            jsxIncludePaths,
-            resolvedNodeBinaryPath,
-            projectInfo.hasTanStackQuery,
-          );
+          const lintDiagnostics = await runOxlint({
+            rootDirectory: directory,
+            hasTypeScript: projectInfo.hasTypeScript,
+            framework: projectInfo.framework,
+            hasReactCompiler: projectInfo.hasReactCompiler,
+            hasTanStackQuery: projectInfo.hasTanStackQuery,
+            includePaths: lintIncludePaths,
+            nodeBinaryPath: resolvedNodeBinaryPath,
+            customRulesOnly: options.customRulesOnly,
+            respectInlineDisables: options.respectInlineDisables,
+          });
           lintSpinner?.succeed("Running lint checks.");
           return lintDiagnostics;
         } catch (error) {
           didLintFail = true;
-          if (!options.scoreOnly && !options.noBranding) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            const isNativeBindingError = errorMessage.includes("native binding");
+          if (!options.scoreOnly) {
+            const lintErrorChain = formatErrorChain(error);
+            const isNativeBindingError = lintErrorChain.includes("native binding");
 
             if (isNativeBindingError) {
               lintSpinner?.fail(
@@ -533,7 +577,7 @@ export const scan = async (
               );
             } else {
               lintSpinner?.fail("Lint checks failed (non-fatal, skipping).");
-              logger.error(errorMessage);
+              logger.error(lintErrorChain);
             }
           }
           return [];
@@ -544,7 +588,7 @@ export const scan = async (
   const deadCodePromise =
     options.deadCode && !isDiffMode
       ? (async () => {
-          const deadCodeSpinner = options.scoreOnly || options.noBranding
+          const deadCodeSpinner = options.scoreOnly
             ? null
             : spinner("Detecting dead code...").start();
           try {
@@ -553,9 +597,9 @@ export const scan = async (
             return knipDiagnostics;
           } catch (error) {
             didDeadCodeFail = true;
-            if (!options.scoreOnly && !options.noBranding) {
+            if (!options.scoreOnly) {
               deadCodeSpinner?.fail("Dead code detection failed (non-fatal, skipping).");
-              logger.error(String(error));
+              logger.error(formatErrorChain(error));
             }
             return [];
           }
@@ -563,13 +607,13 @@ export const scan = async (
       : Promise.resolve<Diagnostic[]>([]);
 
   const [lintDiagnostics, deadCodeDiagnostics] = await Promise.all([lintPromise, deadCodePromise]);
-  const diagnostics = combineDiagnostics(
+  const diagnostics = combineDiagnostics({
     lintDiagnostics,
     deadCodeDiagnostics,
     directory,
     isDiffMode,
     userConfig,
-  );
+  });
 
   const elapsedMilliseconds = performance.now() - startTime;
 
@@ -583,20 +627,37 @@ export const scan = async (
     : await calculateScore(diagnostics);
   const noScoreMessage = OFFLINE_MESSAGE;
 
+  const buildResult = (): ScanResult => ({
+    diagnostics,
+    score: scoreResult,
+    skippedChecks,
+    project: projectInfo,
+    elapsedMilliseconds,
+  });
+
   if (options.scoreOnly) {
     if (scoreResult) {
       logger.log(`${scoreResult.score}`);
     } else {
       logger.dim(noScoreMessage);
     }
-    return { diagnostics, scoreResult, skippedChecks };
+    return buildResult();
+  }
+
+  if (options.noBranding) {
+    // HACK: scan() ran with the logger silenced (see resolveCliScanOptions
+    // setting `silent: true` whenever noBranding is set). Re-enable stdout
+    // ONLY for the HTML report, then restore prior silence so a
+    // programmatic caller doesn't get its own setLoggerSilent override
+    // clobbered.
+    const previouslySilent = isLoggerSilent();
+    setLoggerSilent(false);
+    process.stdout.write(`${buildNoBrandingReport(diagnostics, scoreResult, options.noBrandingThread)}\n`);
+    setLoggerSilent(previouslySilent);
+    return buildResult();
   }
 
   if (diagnostics.length === 0) {
-    if (options.noBranding) {
-      logger.log(buildNoBrandingReport(diagnostics, scoreResult, options.noBrandingThread));
-      return { diagnostics, scoreResult, skippedChecks };
-    }
     if (hasSkippedChecks) {
       const skippedLabel = skippedChecks.join(" and ");
       logger.warn(
@@ -607,23 +668,22 @@ export const scan = async (
     }
     logger.break();
     if (hasSkippedChecks) {
-      if (!options.noBranding) printBranding();
+      printBranding();
       logger.dim("  Score not shown — some checks could not complete.");
     } else if (scoreResult) {
-      if (!options.noBranding) {
-        printBranding(scoreResult.score);
-        printScoreGauge(scoreResult.score, scoreResult.label);
-      }
+      printBranding(scoreResult.score);
+      printScoreGauge(scoreResult.score, scoreResult.label);
     } else {
       logger.dim(`  ${noScoreMessage}`);
     }
-    return { diagnostics, scoreResult, skippedChecks };
+    return buildResult();
   }
 
-  if (!options.noBranding) printDiagnostics(diagnostics, options.verbose);
+  printDiagnostics(diagnostics, options.verbose);
 
-  const displayedSourceFileCount = isDiffMode ? includePaths.length : projectInfo.sourceFileCount;
+  const displayedSourceFileCount = isDiffMode ? includePaths.length : lintSourceFileCount;
 
+  const shouldShowShareLink = !options.offline && options.share;
   printSummary(
     diagnostics,
     elapsedMilliseconds,
@@ -631,16 +691,14 @@ export const scan = async (
     projectInfo.projectName,
     displayedSourceFileCount,
     noScoreMessage,
-    options.offline,
-    options.noBranding,
-    options.noBrandingThread,
+    !shouldShowShareLink,
   );
 
-  if (hasSkippedChecks && !options.noBranding) {
+  if (hasSkippedChecks) {
     const skippedLabel = skippedChecks.join(" and ");
     logger.break();
     logger.warn(`  Note: ${skippedLabel} checks failed — score may be incomplete.`);
   }
 
-  return { diagnostics, scoreResult, skippedChecks };
+  return buildResult();
 };

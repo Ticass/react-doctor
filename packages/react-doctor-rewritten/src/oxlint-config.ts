@@ -220,8 +220,8 @@ const GLOBAL_REACT_DOCTOR_RULES: Record<string, RuleSeverity> = {
   "react-doctor/no-effect-event-in-deps": "error",
   "react-doctor/no-prop-callback-in-effect": "warn",
   "react-doctor/no-derived-useState": "warn",
-  "react-doctor/no-direct-state-mutation": "error",
-  "react-doctor/no-set-state-in-render": "error",
+  "react-doctor/no-direct-state-mutation": "warn",
+  "react-doctor/no-set-state-in-render": "warn",
   "react-doctor/prefer-useReducer": "warn",
   "react-doctor/rerender-lazy-state-init": "warn",
   "react-doctor/rerender-functional-setstate": "warn",
@@ -323,6 +323,15 @@ const GLOBAL_REACT_DOCTOR_RULES: Record<string, RuleSeverity> = {
   "react-doctor/no-disabled-zoom": "error",
   "react-doctor/no-outline-none": "warn",
   "react-doctor/no-long-transition-duration": "warn",
+
+  "react-doctor/design-no-bold-heading": "warn",
+  "react-doctor/design-no-redundant-padding-axes": "warn",
+  "react-doctor/design-no-redundant-size-axes": "warn",
+  "react-doctor/design-no-space-on-flex-children": "warn",
+  "react-doctor/design-no-em-dash-in-jsx-text": "warn",
+  "react-doctor/design-no-three-period-ellipsis": "warn",
+  "react-doctor/design-no-default-tailwind-palette": "warn",
+  "react-doctor/design-no-vague-button-label": "warn",
 
   "react-doctor/async-parallel": "warn",
 };

@@ -7,19 +7,18 @@ import {
   TRIVIAL_INITIALIZER_NAMES,
 } from "../constants.js";
 import {
+  collectPatternNames,
   containsFetchCall,
   countSetStateCalls,
   extractDestructuredPropNames,
   getCallbackStatements,
   getEffectCallback,
   isComponentAssignment,
-  isComponentDeclaration,
   isHookCall,
   isSetterCall,
   isSetterIdentifier,
   isUppercaseName,
   walkAst,
-  walkShallow,
 } from "../helpers.js";
 import type { EsTreeNode, Rule, RuleContext } from "../types.js";
 
@@ -646,13 +645,80 @@ const walkInsideStatementBlocks = (
   }
 };
 
-const expressionReadsName = (expression: EsTreeNode, name: string): boolean => {
-  let didRead = false;
+const collectIdentifierNames = (expression: EsTreeNode): Set<string> => {
+  const names = new Set<string>();
   walkAst(expression, (child: EsTreeNode) => {
-    if (didRead) return;
-    if (child.type === "Identifier" && child.name === name) didRead = true;
+    if (child.type === "Identifier") names.add(child.name);
   });
-  return didRead;
+  return names;
+};
+
+// Build a "name -> identifiers it transitively depends on" graph for
+// every top-level VariableDeclarator in the component body. Includes
+// names referenced anywhere inside the initializer (deps arrays, nested
+// callbacks, member access — we deliberately over-approximate here so
+// that `useMemo(() => derive(state), [state])` propagates `state` into
+// the dependency set of the resulting variable).
+const buildLocalDependencyGraph = (componentBody: EsTreeNode): Map<string, Set<string>> => {
+  const graph = new Map<string, Set<string>>();
+  if (componentBody?.type !== "BlockStatement") return graph;
+  const declaredNames = new Set<string>();
+  for (const statement of componentBody.body ?? []) {
+    if (statement.type !== "VariableDeclaration") continue;
+    for (const declarator of statement.declarations ?? []) {
+      if (!declarator.init) continue;
+      const dependencyNames = collectIdentifierNames(declarator.init);
+      declaredNames.clear();
+      collectPatternNames(declarator.id, declaredNames);
+      for (const declaredName of declaredNames) {
+        const existing = graph.get(declaredName);
+        if (existing === undefined) {
+          graph.set(declaredName, new Set(dependencyNames));
+        } else {
+          for (const dependencyName of dependencyNames) existing.add(dependencyName);
+        }
+      }
+    }
+  }
+  return graph;
+};
+
+// "Read in render" = any identifier (`Identifier`, NOT `JSXIdentifier`)
+// that appears anywhere inside a return expression — JSX text content,
+// `{expression}` containers, attribute values like
+// `<MyContext value={value}>` (the React Context case from #146),
+// `style={…}`, `className={…}`, props passed to children, conditional
+// chains, the lot. JSX element/tag names are `JSXIdentifier`, which we
+// deliberately do not track — referring to a component by name does
+// not "read" any value.
+const collectRenderReachableNames = (returnExpressions: EsTreeNode[]): Set<string> => {
+  const names = new Set<string>();
+  for (const expression of returnExpressions) {
+    walkAst(expression, (child: EsTreeNode) => {
+      if (child.type === "Identifier") names.add(child.name);
+    });
+  }
+  return names;
+};
+
+const expandTransitiveDependencies = (
+  seedNames: Set<string>,
+  dependencyGraph: Map<string, Set<string>>,
+): Set<string> => {
+  const reachable = new Set(seedNames);
+  const queue: string[] = Array.from(seedNames);
+  while (queue.length > 0) {
+    const currentName = queue.pop();
+    if (currentName === undefined) continue;
+    const dependencyNames = dependencyGraph.get(currentName);
+    if (!dependencyNames) continue;
+    for (const dependencyName of dependencyNames) {
+      if (reachable.has(dependencyName)) continue;
+      reachable.add(dependencyName);
+      queue.push(dependencyName);
+    }
+  }
+  return reachable;
 };
 
 export const rerenderStateOnlyInHandlers: Rule = {
@@ -665,11 +731,12 @@ export const rerenderStateOnlyInHandlers: Rule = {
       const returnExpressions = collectReturnExpressions(componentBody);
       if (returnExpressions.length === 0) return;
 
+      const dependencyGraph = buildLocalDependencyGraph(componentBody);
+      const directRenderNames = collectRenderReachableNames(returnExpressions);
+      const renderReachableNames = expandTransitiveDependencies(directRenderNames, dependencyGraph);
+
       for (const binding of bindings) {
-        const isReadInReturn = returnExpressions.some((expression) =>
-          expressionReadsName(expression, binding.valueName),
-        );
-        if (isReadInReturn) continue;
+        if (renderReachableNames.has(binding.valueName)) continue;
 
         let setterCalled = false;
         walkAst(componentBody, (child: EsTreeNode) => {
@@ -891,99 +958,197 @@ export const rerenderDeferReadsHook: Rule = {
   },
 };
 
+// HACK: walk a MemberExpression chain (computed or not) down to the
+// underlying root identifier, so `state.nested.items.push(x)` and
+// `items[0]` both report against `state` / `items` respectively.
+// Returns null if the chain bottoms out at anything other than a plain
+// Identifier (e.g. a call expression, `this`, etc.).
+const getMemberRootName = (node: EsTreeNode | undefined): string | null => {
+  let cursor: EsTreeNode | undefined = node;
+  while (cursor?.type === "MemberExpression") {
+    cursor = cursor.object;
+  }
+  return cursor?.type === "Identifier" ? cursor.name : null;
+};
+
+// HACK: walks the component AST while tracking which state names are
+// SHADOWED in the current scope by a nested function's params or
+// var/let/const declarations. Without this, a handler that locally
+// re-binds the state name (e.g. `const items = raw.split(",")` then
+// `items.push(x)`) gets falsely flagged. We don't do real scope
+// analysis (would need eslint-utils' ScopeManager) — just lexical
+// param + top-level binding collection per function, which covers the
+// >99% of real-world shadowing cases without false positives.
+const collectFunctionLocalBindings = (functionNode: EsTreeNode): Set<string> => {
+  const localBindings = new Set<string>();
+  for (const param of functionNode.params ?? []) {
+    collectPatternNames(param, localBindings);
+  }
+  if (functionNode.body?.type === "BlockStatement") {
+    for (const statement of functionNode.body.body ?? []) {
+      if (statement.type !== "VariableDeclaration") continue;
+      for (const declarator of statement.declarations ?? []) {
+        collectPatternNames(declarator.id, localBindings);
+      }
+    }
+  }
+  return localBindings;
+};
+
+const isFunctionLikeNode = (node: EsTreeNode): boolean =>
+  node.type === "FunctionDeclaration" ||
+  node.type === "FunctionExpression" ||
+  node.type === "ArrowFunctionExpression";
+
+const walkComponentRespectingShadows = (
+  node: EsTreeNode,
+  shadowedStateNames: ReadonlySet<string>,
+  visit: (child: EsTreeNode, currentlyShadowed: ReadonlySet<string>) => void,
+): void => {
+  if (!node || typeof node !== "object") return;
+
+  let nextShadowedStateNames = shadowedStateNames;
+  if (isFunctionLikeNode(node)) {
+    const localBindings = collectFunctionLocalBindings(node);
+    if (localBindings.size > 0) {
+      const merged = new Set(shadowedStateNames);
+      for (const localName of localBindings) merged.add(localName);
+      nextShadowedStateNames = merged;
+    }
+  }
+
+  visit(node, shadowedStateNames);
+
+  for (const key of Object.keys(node)) {
+    if (key === "parent") continue;
+    const child = node[key];
+    if (Array.isArray(child)) {
+      for (const item of child) {
+        if (item && typeof item === "object" && item.type) {
+          walkComponentRespectingShadows(item, nextShadowedStateNames, visit);
+        }
+      }
+    } else if (child && typeof child === "object" && child.type) {
+      walkComponentRespectingShadows(child, nextShadowedStateNames, visit);
+    }
+  }
+};
+
 export const noDirectStateMutation: Rule = {
   create: (context: RuleContext) => {
-    // Maps state variable name → true so we can check mutations anywhere in the file.
-    // Collected from useState destructuring: const [items, setItems] = useState(...)
-    const stateVarNames = new Set<string>();
+    const checkComponent = (componentBody: EsTreeNode | null | undefined): void => {
+      if (!componentBody || componentBody.type !== "BlockStatement") return;
+      const bindings = collectUseStateBindings(componentBody);
+      if (bindings.length === 0) return;
+
+      const stateValueToSetter = new Map<string, string>(
+        bindings.map((binding) => [binding.valueName, binding.setterName] as const),
+      );
+
+      walkComponentRespectingShadows(
+        componentBody,
+        new Set(),
+        (child: EsTreeNode, currentlyShadowed: ReadonlySet<string>) => {
+          if (child.type === "AssignmentExpression") {
+            if (child.left?.type !== "MemberExpression") return;
+            const rootName = getMemberRootName(child.left);
+            if (!rootName || !stateValueToSetter.has(rootName)) return;
+            if (currentlyShadowed.has(rootName)) return;
+            const setterName = stateValueToSetter.get(rootName);
+            context.report({
+              node: child,
+              message: `Direct property assignment on useState value "${rootName}" — call ${setterName} with a new value; React only re-renders on a new reference`,
+            });
+            return;
+          }
+
+          if (child.type === "CallExpression") {
+            const callee = child.callee;
+            if (callee?.type !== "MemberExpression") return;
+            if (callee.property?.type !== "Identifier") return;
+            const methodName = callee.property.name;
+            if (!MUTATING_ARRAY_METHODS.has(methodName)) return;
+            const rootName = getMemberRootName(callee.object);
+            if (!rootName || !stateValueToSetter.has(rootName)) return;
+            if (currentlyShadowed.has(rootName)) return;
+            const setterName = stateValueToSetter.get(rootName);
+            context.report({
+              node: child,
+              message: `In-place mutation of useState value "${rootName}" via .${methodName}() — call ${setterName} with a new array; React only re-renders on a new reference`,
+            });
+          }
+        },
+      );
+    };
 
     return {
+      FunctionDeclaration(node: EsTreeNode) {
+        if (!node.id?.name || !isUppercaseName(node.id.name)) return;
+        checkComponent(node.body);
+      },
       VariableDeclarator(node: EsTreeNode) {
-        if (node.id?.type !== "ArrayPattern") return;
-        if (!isHookCall(node.init, "useState")) return;
-        const stateElement = node.id.elements?.[0];
-        if (stateElement?.type === "Identifier") {
-          stateVarNames.add(stateElement.name);
-        }
-      },
-
-      AssignmentExpression(node: EsTreeNode) {
-        if (node.left?.type !== "MemberExpression") return;
-        // Walk up nested member chains to find the root: stateVar.a.b.c = x
-        let root = node.left.object;
-        while (root?.type === "MemberExpression") root = root.object;
-        if (root?.type !== "Identifier" || !stateVarNames.has(root.name)) return;
-        context.report({
-          node,
-          message: `Direct mutation of state "${root.name}" — pass a new value to the setter instead of mutating in place`,
-        });
-      },
-
-      CallExpression(node: EsTreeNode) {
-        if (node.callee?.type !== "MemberExpression") return;
-        const methodName =
-          node.callee.property?.type === "Identifier" ? node.callee.property.name : null;
-        if (!methodName || !MUTATING_ARRAY_METHODS.has(methodName)) return;
-        // Walk up member chains so stateVar.nested.push() is also caught
-        let root = node.callee.object;
-        while (root?.type === "MemberExpression") root = root.object;
-        if (root?.type !== "Identifier" || !stateVarNames.has(root.name)) return;
-        context.report({
-          node,
-          message: `${root.name}.${methodName}() mutates state in place — use a method that returns a new array (spread, filter, map, toSorted, etc.)`,
-        });
+        if (!isComponentAssignment(node)) return;
+        checkComponent(node.init?.body);
       },
     };
   },
 };
 
+// HACK: an UNCONDITIONAL setter call at a component's render path
+// triggers an infinite re-render loop ("Maximum update depth exceeded").
+// We only flag the obvious shape — `setX(...)` as a top-level
+// ExpressionStatement directly inside the component body — to avoid
+// false positives on the canonical React pattern that conditionally
+// updates state during render to derive from props (see
+// https://react.dev/reference/react/useState#storing-information-from-previous-renders):
+//
+//   if (prevCount !== count) {
+//     setPrevCount(count);  // ← legitimate, reaches a fixed point
+//   }
+//
+// Conditional / loop / try-catch nesting is opaque enough that we'd
+// rather miss the bug than scream at idiomatic code.
+const isUnconditionalSetterCallStatement = (
+  statement: EsTreeNode,
+  setterNames: ReadonlySet<string>,
+): EsTreeNode | null => {
+  if (statement.type !== "ExpressionStatement") return null;
+  const expression = statement.expression;
+  if (expression?.type !== "CallExpression") return null;
+  const callee = expression.callee;
+  if (callee?.type !== "Identifier") return null;
+  if (!setterNames.has(callee.name)) return null;
+  return expression;
+};
+
 export const noSetStateInRender: Rule = {
   create: (context: RuleContext) => {
-    // Analyzes a component's render body for direct setter calls.
-    // Two passes are needed: first collect setter names, then scan for calls —
-    // because a setter used before its useState declaration would be missed in one pass.
-    const analyzeBody = (bodyStatements: EsTreeNode[]): void => {
-      const setterNames = new Set<string>();
-
-      for (const statement of bodyStatements) {
-        walkShallow(statement, (node) => {
-          if (
-            node.type === "VariableDeclarator" &&
-            node.id?.type === "ArrayPattern" &&
-            isHookCall(node.init, "useState")
-          ) {
-            const setter = node.id.elements?.[1];
-            if (setter?.type === "Identifier") setterNames.add(setter.name);
-          }
-        });
-      }
-
+    const checkComponent = (componentBody: EsTreeNode | null | undefined): void => {
+      if (!componentBody || componentBody.type !== "BlockStatement") return;
+      const setterNames = new Set(
+        collectUseStateBindings(componentBody).map((binding) => binding.setterName),
+      );
       if (setterNames.size === 0) return;
 
-      for (const statement of bodyStatements) {
-        walkShallow(statement, (node) => {
-          if (
-            node.type === "CallExpression" &&
-            node.callee?.type === "Identifier" &&
-            setterNames.has(node.callee.name)
-          ) {
-            context.report({
-              node,
-              message: `${node.callee.name}() called during render — move this into a useEffect or an event handler to avoid an infinite render loop`,
-            });
-          }
+      for (const statement of componentBody.body ?? []) {
+        const setterCall = isUnconditionalSetterCallStatement(statement, setterNames);
+        if (!setterCall) continue;
+        const setterIdentifierName = setterCall.callee.name;
+        context.report({
+          node: setterCall,
+          message: `${setterIdentifierName}() called unconditionally at the top of render — causes an infinite re-render loop. Move into a useEffect or an event handler. (To derive state from props, guard the call: \`if (prev !== prop) ${setterIdentifierName}(prop)\`)`,
         });
       }
     };
 
     return {
       FunctionDeclaration(node: EsTreeNode) {
-        if (!isComponentDeclaration(node)) return;
-        analyzeBody(node.body?.body ?? []);
+        if (!node.id?.name || !isUppercaseName(node.id.name)) return;
+        checkComponent(node.body);
       },
       VariableDeclarator(node: EsTreeNode) {
         if (!isComponentAssignment(node)) return;
-        analyzeBody(node.init.body?.body ?? []);
+        checkComponent(node.init?.body);
       },
     };
   },
