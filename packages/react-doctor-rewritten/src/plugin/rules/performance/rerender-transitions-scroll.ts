@@ -1,0 +1,85 @@
+import { defineRule } from "../../utils/define-rule.js";
+import { walkAst } from "../../utils/walk-ast.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+const HIGH_FREQUENCY_DOM_EVENTS = new Set([
+  "scroll",
+  "mousemove",
+  "wheel",
+  "pointermove",
+  "touchmove",
+  "drag",
+]);
+
+const isAddEventListenerCall = (node: EsTreeNode): boolean => {
+  if (node.type !== "CallExpression") return false;
+  if (node.callee?.type !== "MemberExpression") return false;
+  if (node.callee.property?.type !== "Identifier") return false;
+  if (node.callee.property.name !== "addEventListener") return false;
+  return true;
+};
+
+const handlerCallsSetState = (handler: EsTreeNode): EsTreeNode | null => {
+  if (handler.type !== "ArrowFunctionExpression" && handler.type !== "FunctionExpression") {
+    return null;
+  }
+  let setStateCall: EsTreeNode | null = null;
+  walkAst(handler.body, (child: EsTreeNode) => {
+    if (setStateCall) return;
+    if (
+      child.type === "CallExpression" &&
+      child.callee?.type === "Identifier" &&
+      /^set[A-Z]/.test(child.callee.name)
+    ) {
+      setStateCall = child;
+    }
+  });
+  return setStateCall;
+};
+
+// HACK: scroll, mousemove, wheel, pointermove, and similar high-frequency
+// DOM events fire dozens to hundreds of times per second. Calling
+// `setState` from these handlers triggers a re-render on every event,
+// pegging the JS thread and causing the user-visible jank these
+// listeners were trying to react to. Use `useTransition`/`startTransition`
+// to mark the update as non-urgent (so the browser can interrupt it for
+// input), or stash the value in a ref + raf throttle, or use
+// `useDeferredValue`.
+export const rerenderTransitionsScroll = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNode) {
+      if (!isAddEventListenerCall(node)) return;
+      const eventArg = node.arguments?.[0];
+      if (eventArg?.type !== "Literal") return;
+      const eventName = eventArg.value;
+      if (typeof eventName !== "string" || !HIGH_FREQUENCY_DOM_EVENTS.has(eventName)) return;
+
+      const handler = node.arguments?.[1];
+      if (!handler) return;
+      const setStateCall = handlerCallsSetState(handler);
+      if (!setStateCall) return;
+
+      // Skip if the setState is already wrapped in startTransition.
+      let cursor: EsTreeNode | null = setStateCall.parent ?? null;
+      while (cursor && cursor !== handler) {
+        if (
+          cursor.type === "CallExpression" &&
+          cursor.callee?.type === "Identifier" &&
+          (cursor.callee.name === "startTransition" ||
+            cursor.callee.name === "requestAnimationFrame" ||
+            cursor.callee.name === "requestIdleCallback")
+        ) {
+          return;
+        }
+        cursor = cursor.parent ?? null;
+      }
+
+      context.report({
+        node: setStateCall,
+        message: `setState in a "${eventName}" handler triggers re-renders at scroll/pointer frequency — wrap in startTransition (mark as non-urgent), use useDeferredValue, or stash in a ref + rAF throttle`,
+      });
+    },
+  }),
+});

@@ -1,0 +1,72 @@
+import {
+  STABLE_HOOK_WRAPPERS,
+  TANSTACK_QUERY_CLIENT_CLASS,
+  UPPERCASE_PATTERN,
+} from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const queryStableQueryClient = defineRule<Rule>({
+  create: (context: RuleContext) => {
+    let componentDepth = 0;
+    let stableHookDepth = 0;
+
+    return {
+      FunctionDeclaration(node: EsTreeNode) {
+        if (node.id?.name && UPPERCASE_PATTERN.test(node.id.name)) {
+          componentDepth++;
+        }
+      },
+      "FunctionDeclaration:exit"(node: EsTreeNode) {
+        if (node.id?.name && UPPERCASE_PATTERN.test(node.id.name)) {
+          componentDepth--;
+        }
+      },
+      VariableDeclarator(node: EsTreeNode) {
+        if (
+          node.id?.type === "Identifier" &&
+          UPPERCASE_PATTERN.test(node.id.name) &&
+          (node.init?.type === "ArrowFunctionExpression" ||
+            node.init?.type === "FunctionExpression")
+        ) {
+          componentDepth++;
+        }
+      },
+      "VariableDeclarator:exit"(node: EsTreeNode) {
+        if (
+          node.id?.type === "Identifier" &&
+          UPPERCASE_PATTERN.test(node.id.name) &&
+          (node.init?.type === "ArrowFunctionExpression" ||
+            node.init?.type === "FunctionExpression")
+        ) {
+          componentDepth--;
+        }
+      },
+      CallExpression(node: EsTreeNode) {
+        if (isHookCall(node, STABLE_HOOK_WRAPPERS)) {
+          stableHookDepth++;
+        }
+      },
+      "CallExpression:exit"(node: EsTreeNode) {
+        if (isHookCall(node, STABLE_HOOK_WRAPPERS)) {
+          stableHookDepth = Math.max(0, stableHookDepth - 1);
+        }
+      },
+      NewExpression(node: EsTreeNode) {
+        if (componentDepth <= 0) return;
+        if (stableHookDepth > 0) return;
+        if (node.callee?.type !== "Identifier" || node.callee.name !== TANSTACK_QUERY_CLIENT_CLASS)
+          return;
+
+        context.report({
+          node,
+          message:
+            "new QueryClient() inside a component — creates a new cache on every render. Move to module scope or wrap in useState(() => new QueryClient())",
+        });
+      },
+    };
+  },
+});

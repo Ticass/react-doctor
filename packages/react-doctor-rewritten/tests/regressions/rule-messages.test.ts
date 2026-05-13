@@ -20,7 +20,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { runOxlint } from "../../src/utils/run-oxlint.js";
-import { setupReactProject } from "./_helpers.js";
+import { buildTestProject, setupReactProject } from "./_helpers.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rd-rule-messages-"));
 
@@ -57,10 +57,7 @@ export const FullName = ({ firstName, lastName }: { firstName: string; lastName:
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     const messages = diagnostics
@@ -109,10 +106,10 @@ export const AppGuard = () => {
     const projectDir = setupNextProject();
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "nextjs",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({
+        rootDirectory: projectDir,
+        framework: "nextjs",
+      }),
     });
 
     const pagesIssue = diagnostics.find(
@@ -129,10 +126,10 @@ export const AppGuard = () => {
     const projectDir = setupNextProject();
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "nextjs",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({
+        rootDirectory: projectDir,
+        framework: "nextjs",
+      }),
     });
 
     const appIssue = diagnostics.find(

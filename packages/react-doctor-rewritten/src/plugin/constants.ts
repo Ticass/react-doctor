@@ -177,7 +177,7 @@ export const SECRET_FALSE_POSITIVE_SUFFIXES = new Set([
 
 export const LOADING_STATE_PATTERN = /^(?:isLoading|isPending)$/;
 
-export const TANSTACK_ROUTE_FILE_PATTERN = /[\\/]routes[\\/]/;
+export const TANSTACK_ROUTE_FILE_PATTERN = /[/\\]routes[/\\]/;
 export const TANSTACK_ROOT_ROUTE_FILE_PATTERN = /__root\.(tsx?|jsx?)$/;
 
 export const TANSTACK_ROUTE_PROPERTY_ORDER = [
@@ -263,19 +263,69 @@ export const TRIVIAL_INITIALIZER_NAMES = new Set([
   "parseFloat",
 ]);
 
+// Used by `noDerivedStateEffect` to decide whether a derived-state
+// expression is "expensive enough" to recommend `useMemo` over plain
+// inline computation. Coercion / parsing / boundary helpers are cheap
+// and should still get the "compute during render" message.
+// MemberExpression callees (e.g. `Math.floor`, `Date.now`) are
+// recognized via BUILTIN_GLOBAL_NAMESPACE_NAMES (the chain root), not
+// here — putting "Math" or "Date" in this set wouldn't match because
+// the expensive-derivation walker reads the *property* name.
+export const TRIVIAL_DERIVATION_CALLEE_NAMES = new Set([
+  "Boolean",
+  "String",
+  "Number",
+  "Array",
+  "Object",
+  "parseInt",
+  "parseFloat",
+  "isNaN",
+  "isFinite",
+  "BigInt",
+  "Symbol",
+]);
+
+// Built-in JS globals whose method calls (`Math.floor(x)`,
+// `Date.now()`, `JSON.parse(x)`, …) are not reactive reads and don't
+// count as "expensive derivations". The chain root is what matters —
+// `Math.floor(raw)` should only treat `raw` as a reactive read, and
+// the call itself should be classified as trivial regardless of which
+// method is invoked.
+export const BUILTIN_GLOBAL_NAMESPACE_NAMES = new Set([
+  "Math",
+  "Date",
+  "JSON",
+  "Object",
+  "Array",
+  "Number",
+  "String",
+  "Boolean",
+  "RegExp",
+  "Symbol",
+  "BigInt",
+  "Reflect",
+]);
+
 export const SETTER_PATTERN = /^set[A-Z]/;
 export const RENDER_FUNCTION_PATTERN = /^render[A-Z]/;
 export const UPPERCASE_PATTERN = /^[A-Z]/;
-export const PAGE_FILE_PATTERN = /[\\/]page\.(tsx?|jsx?)$/;
-export const PAGE_OR_LAYOUT_FILE_PATTERN = /[\\/](page|layout)\.(tsx?|jsx?)$/;
+export const PAGE_FILE_PATTERN = /[/\\]page\.(tsx?|jsx?)$/;
+
+// React's idiomatic event-handler prop convention — `onClick`, `onChange`,
+// `onSearch`, etc. Used by `prefer-use-effect-event` to decide whether a
+// destructured prop dep should be treated as function-typed. Without this
+// filter the rule false-positives on scalar props that happen to be
+// destructured.
+export const REACT_HANDLER_PROP_PATTERN = /^on[A-Z]/;
+export const PAGE_OR_LAYOUT_FILE_PATTERN = /[/\\](page|layout)\.(tsx?|jsx?)$/;
 
 export const INTERNAL_PAGE_PATH_PATTERN =
-  /\/(?:(?:\((?:dashboard|admin|settings|account|internal|manage|console|portal|auth|onboarding|app|ee|protected)\))|(?:dashboard|admin|settings|account|internal|manage|console|portal))\//i;
+  /[/\\](?:(?:\((?:dashboard|admin|settings|account|internal|manage|console|portal|auth|onboarding|app|ee|protected)\))|(?:dashboard|admin|settings|account|internal|manage|console|portal))[/\\]/i;
 
 export const TEST_FILE_PATTERN = /\.(?:test|spec|stories)\.[tj]sx?$/;
-export const OG_ROUTE_PATTERN = /[\\/]og\b/i;
+export const OG_ROUTE_PATTERN = /[/\\]og\b/i;
 
-export const PAGES_DIRECTORY_PATTERN = /[\\/]pages[\\/]/;
+export const PAGES_DIRECTORY_PATTERN = /[/\\]pages[/\\]/;
 
 export const NEXTJS_NAVIGATION_FUNCTIONS = new Set([
   "redirect",
@@ -295,9 +345,9 @@ export const EXECUTABLE_SCRIPT_TYPES = new Set([
   "module",
 ]);
 
-export const APP_DIRECTORY_PATTERN = /[\\/]app[\\/]/;
+export const APP_DIRECTORY_PATTERN = /[/\\]app[/\\]/;
 
-export const ROUTE_HANDLER_FILE_PATTERN = /[\\/]route\.(tsx?|jsx?)$/;
+export const ROUTE_HANDLER_FILE_PATTERN = /[/\\]route\.(tsx?|jsx?)$/;
 
 export const MUTATION_METHOD_NAMES = new Set([
   "create",
@@ -346,6 +396,240 @@ export const MUTATING_ROUTE_SEGMENTS = new Set([
 
 export const EFFECT_HOOK_NAMES = new Set(["useEffect", "useLayoutEffect"]);
 export const HOOKS_WITH_DEPS = new Set(["useEffect", "useLayoutEffect", "useMemo", "useCallback"]);
+
+// Direct CallExpression callees that schedule a callback to run later,
+// outside the current render's microtask. Two distinct rules consume this
+// set, so the names below intentionally describe the shape (timers and
+// schedulers) rather than either rule's interpretation.
+//
+// Consumers:
+//   - `prefer-use-effect-event` treats them as "sub-handler" boundaries:
+//     calling a reactive value from inside the scheduled callback is the
+//     classic case for `useEffectEvent` (see "Separating Events from
+//     Effects").
+//   - `no-effect-chain` treats them as external-sync direct callees so a
+//     useEffect that only schedules timers is exempt from the chain rule.
+export const TIMER_AND_SCHEDULER_DIRECT_CALLEE_NAMES = new Set([
+  "setTimeout",
+  "setInterval",
+  "requestAnimationFrame",
+  "requestIdleCallback",
+  "queueMicrotask",
+]);
+
+// Timer registrations that ALWAYS need a corresponding cleanup call
+// (a stricter subset of the scheduler list above — `requestAnimationFrame`
+// and friends already invoke once and self-clean, but `setTimeout` /
+// `setInterval` keep firing until explicitly cleared).
+export const TIMER_CALLEE_NAMES_REQUIRING_CLEANUP = new Set(["setInterval", "setTimeout"]);
+
+export const TIMER_CLEANUP_CALLEE_NAMES = new Set(["clearInterval", "clearTimeout"]);
+
+// Globals whose values mutate outside the React data flow. Listing
+// them as deps doesn't trigger a re-run when they change because
+// React compares deps with `Object.is` during render — and the read
+// happens during render, before the mutation. From "Lifecycle of
+// Reactive Effects" — Can global or mutable values be dependencies?
+export const MUTABLE_GLOBAL_ROOTS = new Set([
+  "location",
+  "window",
+  "document",
+  "navigator",
+  "history",
+  "screen",
+  "performance",
+]);
+
+// Subscription-shaped method names recognized by `prefer-use-sync-external-store`.
+// Covers the canonical `store.subscribe`, the browser `addEventListener` /
+// `addListener`, the EventEmitter `on` / `watch` / `listen`, and shorter
+// store APIs like Jotai's `store.sub`. The detector cares only about the
+// AST shape (one of these is the property name of a MemberExpression
+// callee), never the library that implemented them.
+export const SUBSCRIPTION_METHOD_NAMES = new Set([
+  "subscribe",
+  "addEventListener",
+  "addListener",
+  "on",
+  "watch",
+  "listen",
+  "sub",
+]);
+
+// Methods that pair with the subscription methods above as their cleanup
+// counterparts. Used to recognize a valid `return () => removeEventListener(...)`
+// cleanup form even when the subscribe call is `addEventListener` rather
+// than a `subscribe()` whose return value gets re-bound.
+export const UNSUBSCRIPTION_METHOD_NAMES = new Set([
+  "unsubscribe",
+  "removeEventListener",
+  "removeListener",
+  "off",
+  "unwatch",
+  "unlisten",
+  "unsub",
+]);
+
+// Identifier names recognized as "this is a release/teardown call"
+// when they appear as a direct call inside an effect's cleanup
+// return — covers both library unsubscribe shorthands
+// (UNSUBSCRIPTION_METHOD_NAMES) and the generic teardown vocabulary
+// (`cleanup`, `dispose`, `destroy`, `teardown`). Matched
+// case-insensitively at the call site.
+export const CLEANUP_LIKE_RELEASE_CALLEE_NAMES = new Set([
+  ...UNSUBSCRIPTION_METHOD_NAMES,
+  "cleanup",
+  "dispose",
+  "destroy",
+  "teardown",
+]);
+
+// Used by `no-effect-chain` to decide whether an effect is doing
+// "real" external-system synchronization (in which case effects on
+// either side of the chain are exempt, per the article's own caveat
+// about cascading network fetches) versus pure internal reactivity
+// (which is the anti-pattern). A cleanup return is the strongest
+// signal; the curated method list covers the rest.
+//
+// Member-method names that, on their own, mark a call as external
+// sync regardless of receiver. These are unambiguous in real React
+// codebases — they don't clash with built-in JS APIs.
+//
+// Layered on top of `SUBSCRIPTION_METHOD_NAMES` so the subscribe-shape
+// detector and the external-sync detector can never disagree about
+// which method names are "subscriptions."
+export const EXTERNAL_SYNC_MEMBER_METHOD_NAMES = new Set([
+  ...SUBSCRIPTION_METHOD_NAMES,
+  // Imperative widget lifecycle (createConnection().connect()/.disconnect())
+  "connect",
+  "disconnect",
+  "open",
+  "close",
+  // Mutating HTTP verbs — `*.post(url, body)` is essentially always
+  // a network call. (`delete` is moved to the ambiguous set below
+  // because Map / Set / URLSearchParams / Headers / FormData /
+  // WeakMap all expose `.delete(...)` as a built-in method.)
+  "fetch",
+  "post",
+  "put",
+  "patch",
+]);
+
+// HACK: `get`, `head`, `options` are HTTP verbs but ALSO names of
+// universal data-structure methods (`Map.get`, `URLSearchParams.get`,
+// `FormData.get`, `Headers.get`, `WeakMap.get`, `Set.has`, etc.). We
+// only treat them as external-sync calls when the receiver is a
+// recognized HTTP-client-shaped name. Lets the `axios.get(...)`
+// cascade case work without false-classifying `params.get('id')` as
+// external sync.
+//
+// Layered on top of `FETCH_MEMBER_OBJECTS` (the canonical HTTP-client
+// receiver list used by `containsFetchCall`) so adding a new client
+// name in one place propagates to both detectors.
+export const EXTERNAL_SYNC_HTTP_CLIENT_RECEIVERS = new Set([
+  ...FETCH_MEMBER_OBJECTS,
+  "api",
+  "client",
+  "http",
+  "fetcher",
+]);
+
+export const EXTERNAL_SYNC_AMBIGUOUS_HTTP_METHOD_NAMES = new Set([
+  "get",
+  "head",
+  "options",
+  "delete",
+]);
+
+// Direct callees that mark an effect body as external-sync. Combines
+// the shared HTTP-client direct-callee list (`FETCH_CALLEE_NAMES`)
+// with the timer / scheduler list above so all three rule families
+// share a single source of truth for these names.
+export const EXTERNAL_SYNC_DIRECT_CALLEE_NAMES = new Set([
+  ...FETCH_CALLEE_NAMES,
+  ...TIMER_AND_SCHEDULER_DIRECT_CALLEE_NAMES,
+]);
+
+export const EXTERNAL_SYNC_OBSERVER_CONSTRUCTORS = new Set([
+  "IntersectionObserver",
+  "MutationObserver",
+  "ResizeObserver",
+  "PerformanceObserver",
+]);
+
+// Used by `no-event-trigger-state` to recognize when a useEffect body
+// is performing the §6 anti-pattern from "You Might Not Need an Effect"
+// — running an event-shaped side effect (POST, navigation, notification,
+// analytics) that the user actually triggered with a button click.
+// Tightly scoped on purpose — adding a callee name here can produce
+// false positives on pure helper functions, so the bar is "this name
+// almost always denotes a fire-and-forget user-action effect."
+// Layered on top of `FETCH_CALLEE_NAMES` so adding a new HTTP client
+// shorthand in one place propagates to every detector that recognizes it.
+//
+// HACK: ambiguous generic verbs (`track`, `logEvent`, `del`) used to
+// live here too. They produced FPs on user-defined helpers
+// (`track(progress)`, `del(item)`) that have nothing to do with
+// network/analytics side effects. Detection still works via the
+// receiver-bound member-call shape (`analytics.track(...)`,
+// `api.del(...)`) in `EVENT_TRIGGERED_SIDE_EFFECT_MEMBER_METHODS`.
+//
+// `post` / `put` / `patch` are KEPT here — the canonical "You Might
+// Not Need an Effect" §6 example is `post(jsonToSubmit)` as a bare
+// callee, so removing them would silently miss the textbook case.
+// The trade-off (FPs on user helpers named `post(...)`) is acceptable
+// at this scope.
+export const EVENT_TRIGGERED_SIDE_EFFECT_CALLEES = new Set([
+  ...FETCH_CALLEE_NAMES,
+  // Network shorthand verbs (article uses `post`)
+  "post",
+  "put",
+  "patch",
+  // Navigation
+  "navigate",
+  "navigateTo",
+  // UI side effects
+  "showNotification",
+  "toast",
+  "alert",
+  "confirm",
+  // Analytics
+  "logVisit",
+  "captureEvent",
+]);
+
+// Recognized when the call shape is `<obj>.<method>(...)` — covers
+// `axios.post`, `api.post`, `analytics.track`, `posthog.capture`,
+// etc. without enumerating every possible object. Names here are
+// unambiguous: they don't clash with built-in JS prototype methods
+// or common application code.
+export const EVENT_TRIGGERED_SIDE_EFFECT_MEMBER_METHODS = new Set([
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "navigate",
+  "capture",
+  "track",
+  "logEvent",
+]);
+
+// HACK: `push` and `replace` are router methods (`router.push("/foo")`,
+// `history.replace("/bar")`) but ALSO universal Array / String prototype
+// methods. `[1, 2].push(3)` and `"a".replace("b", "c")` are NOT event-
+// shaped side effects — calling `setX` after them in a useEffect is
+// usually fine. We only treat them as event-triggered side effects when
+// the receiver looks router-shaped. Keeps the false-positive rate down
+// without losing the `router.push(...)` / `history.replace(...)` cases.
+export const EVENT_TRIGGERED_NAVIGATION_METHOD_NAMES = new Set(["push", "replace"]);
+
+export const NAVIGATION_RECEIVER_NAMES = new Set([
+  "router",
+  "navigation",
+  "navigator",
+  "history",
+  "location",
+]);
 export const CHAINABLE_ITERATION_METHODS = new Set(["map", "filter", "forEach", "flatMap"]);
 export const STORAGE_OBJECTS = new Set(["localStorage", "sessionStorage"]);
 
@@ -383,31 +667,40 @@ export const REACT_NATIVE_TEXT_COMPONENT_KEYWORDS = new Set([
   "Body",
 ]);
 
-export const DEPRECATED_RN_MODULE_REPLACEMENTS: Record<string, string> = {
-  AsyncStorage: "@react-native-async-storage/async-storage",
-  Picker: "@react-native-picker/picker",
-  PickerIOS: "@react-native-picker/picker",
-  DatePickerIOS: "@react-native-community/datetimepicker",
-  DatePickerAndroid: "@react-native-community/datetimepicker",
-  ProgressBarAndroid: "a community alternative",
-  ProgressViewIOS: "a community alternative",
-  SafeAreaView: "react-native-safe-area-context",
-  Slider: "@react-native-community/slider",
-  ViewPagerAndroid: "react-native-pager-view",
-  WebView: "react-native-webview",
-  NetInfo: "@react-native-community/netinfo",
-  CameraRoll: "@react-native-camera-roll/camera-roll",
-  Clipboard: "@react-native-clipboard/clipboard",
-  ImageEditor: "@react-native-community/image-editor",
-  MaskedViewIOS: "@react-native-masked-view/masked-view",
-};
+// HACK: Maps (not plain objects) so that an unusual `import { constructor }
+// from "react-native"` (or any other Object.prototype name) doesn't fall
+// through to `Object.prototype.constructor` and falsely report. Symmetric
+// with the deprecated-React-API rules in `architecture.ts`.
+export const DEPRECATED_RN_MODULE_REPLACEMENTS = new Map<string, string>([
+  ["AsyncStorage", "@react-native-async-storage/async-storage"],
+  ["Picker", "@react-native-picker/picker"],
+  ["PickerIOS", "@react-native-picker/picker"],
+  ["DatePickerIOS", "@react-native-community/datetimepicker"],
+  ["DatePickerAndroid", "@react-native-community/datetimepicker"],
+  ["ProgressBarAndroid", "a community alternative"],
+  ["ProgressViewIOS", "a community alternative"],
+  ["SafeAreaView", "react-native-safe-area-context"],
+  ["Slider", "@react-native-community/slider"],
+  ["ViewPagerAndroid", "react-native-pager-view"],
+  ["WebView", "react-native-webview"],
+  ["NetInfo", "@react-native-community/netinfo"],
+  ["CameraRoll", "@react-native-camera-roll/camera-roll"],
+  ["Clipboard", "@react-native-clipboard/clipboard"],
+  ["ImageEditor", "@react-native-community/image-editor"],
+  ["MaskedViewIOS", "@react-native-masked-view/masked-view"],
+]);
 
-export const LEGACY_EXPO_PACKAGE_REPLACEMENTS: Record<string, string> = {
-  "expo-av": "expo-audio for audio and expo-video for video",
-  "expo-permissions": "the permissions API in each module (e.g. Camera.requestPermissionsAsync())",
-  "@expo/vector-icons":
+export const LEGACY_EXPO_PACKAGE_REPLACEMENTS = new Map<string, string>([
+  ["expo-av", "expo-audio for audio and expo-video for video"],
+  [
+    "expo-permissions",
+    "the permissions API in each module (e.g. Camera.requestPermissionsAsync())",
+  ],
+  [
+    "@expo/vector-icons",
     "expo-symbols or expo-image (see https://docs.expo.dev/versions/latest/sdk/symbols/)",
-};
+  ],
+]);
 
 export const REACT_NATIVE_LIST_COMPONENTS = new Set([
   "FlatList",
@@ -459,6 +752,26 @@ export const HEAVY_HEADING_TAILWIND_WEIGHTS = new Set([
 ]);
 
 export const TAILWIND_DEFAULT_PALETTE_NAMES = ["indigo", "gray", "slate"];
+
+// HACK: the canonical Tailwind v3/v4 numeric color stops. Anchoring the
+// `design-no-default-tailwind-palette` regex to this exact set (rather
+// than `\d{2,3}`) avoids false-positiving on Radix Colors integrations
+// that map non-Tailwind stops onto Tailwind utilities (`text-gray-11`,
+// `text-gray-12`, `text-gray-10` are Radix scale numbers, not Tailwind
+// defaults — flagging them as "the Tailwind template default" is wrong).
+export const TAILWIND_DEFAULT_PALETTE_STOPS = [
+  "50",
+  "100",
+  "200",
+  "300",
+  "400",
+  "500",
+  "600",
+  "700",
+  "800",
+  "900",
+  "950",
+];
 
 export const TAILWIND_PALETTE_UTILITY_PREFIXES = [
   "text",

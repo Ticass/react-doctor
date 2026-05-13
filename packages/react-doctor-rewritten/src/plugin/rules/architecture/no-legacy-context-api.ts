@@ -1,0 +1,80 @@
+import { defineRule } from "../../utils/define-rule.js";
+import { isUppercaseName } from "../../utils/is-uppercase-name.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+// HACK: legacy context (`childContextTypes` + `getChildContext` on
+// providers, `contextTypes` on consumers) was deprecated in 16.3, warns
+// in 18.3.1, and is REMOVED in 19. Migration is cross-file (provider +
+// every consumer must be moved together) so flagging surface area early
+// is high-leverage. We catch the static class-property forms AND the
+// `Foo.contextTypes = {...}` shape — both styles appear in the wild,
+// and missing one leaves silent gaps.
+const LEGACY_CONTEXT_NAMES: ReadonlySet<string> = new Set([
+  "childContextTypes",
+  "contextTypes",
+  "getChildContext",
+]);
+
+const buildLegacyContextMessage = (memberName: string): string => {
+  if (memberName === "childContextTypes" || memberName === "getChildContext") {
+    return `${memberName} is part of the legacy context API (REMOVED in React 19). Replace the provider with \`createContext\` + \`<MyContext.Provider value={...}>\` and consume via \`useContext()\` (or \`use()\` on React 19+) — every consumer must migrate together`;
+  }
+  return "contextTypes is part of the legacy context API (REMOVED in React 19). Replace with `static contextType = MyContext` (single context) or read the modern context with `useContext()` / `use()` from a function component — coordinate with the provider's migration";
+};
+
+const isInsideClassBody = (node: EsTreeNode): boolean => {
+  let current = node.parent;
+  while (current) {
+    if (current.type === "ClassBody") return true;
+    if (
+      current.type === "FunctionDeclaration" ||
+      current.type === "FunctionExpression" ||
+      current.type === "ArrowFunctionExpression"
+    ) {
+      return false;
+    }
+    current = current.parent;
+  }
+  return false;
+};
+
+export const noLegacyContextApi = defineRule<Rule>({
+  create: (context: RuleContext) => {
+    const checkMember = (memberNode: EsTreeNode | undefined): void => {
+      if (!memberNode) return;
+      if (memberNode.type !== "MethodDefinition" && memberNode.type !== "PropertyDefinition")
+        return;
+      if (memberNode.key?.type !== "Identifier") return;
+      if (!LEGACY_CONTEXT_NAMES.has(memberNode.key.name)) return;
+      context.report({
+        node: memberNode.key,
+        message: buildLegacyContextMessage(memberNode.key.name),
+      });
+    };
+
+    return {
+      ClassBody(node: EsTreeNode) {
+        for (const member of node.body ?? []) {
+          checkMember(member);
+        }
+      },
+      AssignmentExpression(node: EsTreeNode) {
+        if (node.operator !== "=") return;
+        const left = node.left;
+        if (left?.type !== "MemberExpression") return;
+        if (left.computed) return;
+        if (left.property?.type !== "Identifier") return;
+        if (!LEGACY_CONTEXT_NAMES.has(left.property.name)) return;
+        if (left.object?.type !== "Identifier") return;
+        if (!isUppercaseName(left.object.name)) return;
+        if (isInsideClassBody(node)) return;
+        context.report({
+          node: left,
+          message: buildLegacyContextMessage(left.property.name),
+        });
+      },
+    };
+  },
+});

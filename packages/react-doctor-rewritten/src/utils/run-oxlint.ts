@@ -6,13 +6,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ERROR_PREVIEW_LENGTH_CHARS,
-  JSX_FILE_PATTERN,
   PROXY_OUTPUT_MAX_BYTES,
+  SOURCE_FILE_PATTERN,
 } from "../constants.js";
 import { batchIncludePaths } from "./batch-include-paths.js";
+import { canOxlintExtendConfig } from "./can-oxlint-extend-config.js";
 import { collectIgnorePatterns } from "./collect-ignore-patterns.js";
-import { ALL_REACT_DOCTOR_RULE_KEYS, createOxlintConfig } from "../oxlint-config.js";
-import type { CleanedDiagnostic, Diagnostic, Framework, OxlintOutput } from "../types.js";
+import { detectUserLintConfigPaths } from "./detect-user-lint-config.js";
+import {
+  ALL_REACT_DOCTOR_RULE_KEYS,
+  FRAMEWORK_SPECIFIC_RULE_KEYS,
+  RULE_METADATA,
+  createOxlintConfig,
+} from "../oxlint-config.js";
+import type { CleanedDiagnostic, Diagnostic, OxlintOutput, ProjectInfo } from "../types.js";
 import { neutralizeDisableDirectives } from "./neutralize-disable-directives.js";
 
 const esmRequire = createRequire(import.meta.url);
@@ -24,25 +31,48 @@ const PLUGIN_CATEGORY_MAP: Record<string, string> = {
   "react-doctor": "Other",
   "jsx-a11y": "Accessibility",
   knip: "Dead Code",
+  effect: "State & Effects",
+  // Plugins users commonly enable in their own oxlint / eslint config
+  // and that react-doctor folds into the scan via `extends`. Sensible
+  // defaults so adopted-rule diagnostics don't all collapse into the
+  // generic "Other" bucket in the output grouping.
+  eslint: "Correctness",
+  oxc: "Correctness",
+  typescript: "Correctness",
+  unicorn: "Correctness",
+  import: "Bundle Size",
+  promise: "Correctness",
+  n: "Correctness",
+  node: "Correctness",
+  vitest: "Correctness",
+  jest: "Correctness",
+  nextjs: "Next.js",
 };
 
 const RULE_CATEGORY_MAP: Record<string, string> = {
   "react-doctor/no-derived-state-effect": "State & Effects",
   "react-doctor/no-fetch-in-effect": "State & Effects",
+  "react-doctor/no-mirror-prop-effect": "State & Effects",
+  "react-doctor/no-mutable-in-deps": "State & Effects",
   "react-doctor/no-cascading-set-state": "State & Effects",
+  "react-doctor/no-effect-chain": "State & Effects",
   "react-doctor/no-effect-event-handler": "State & Effects",
   "react-doctor/no-effect-event-in-deps": "State & Effects",
+  "react-doctor/no-event-trigger-state": "State & Effects",
   "react-doctor/no-prop-callback-in-effect": "State & Effects",
   "react-doctor/no-derived-useState": "State & Effects",
   "react-doctor/no-direct-state-mutation": "State & Effects",
   "react-doctor/no-set-state-in-render": "State & Effects",
+  "react-doctor/prefer-use-effect-event": "State & Effects",
   "react-doctor/prefer-useReducer": "State & Effects",
+  "react-doctor/prefer-use-sync-external-store": "State & Effects",
   "react-doctor/rerender-lazy-state-init": "Performance",
   "react-doctor/rerender-functional-setstate": "Performance",
   "react-doctor/rerender-dependencies": "State & Effects",
   "react-doctor/rerender-state-only-in-handlers": "Performance",
   "react-doctor/rerender-defer-reads-hook": "Performance",
   "react-doctor/advanced-event-handler-refs": "Performance",
+  "react-doctor/effect-needs-cleanup": "State & Effects",
 
   "react-doctor/no-generic-handler-names": "Architecture",
   "react-doctor/no-giant-component": "Architecture",
@@ -52,6 +82,10 @@ const RULE_CATEGORY_MAP: Record<string, string> = {
   "react-doctor/no-render-in-render": "Architecture",
   "react-doctor/no-nested-component-definition": "Correctness",
   "react-doctor/react-compiler-destructure-method": "Architecture",
+  "react-doctor/no-legacy-class-lifecycles": "Correctness",
+  "react-doctor/no-legacy-context-api": "Correctness",
+  "react-doctor/no-default-props": "Architecture",
+  "react-doctor/no-react-dom-deprecated-apis": "Architecture",
 
   "react-doctor/no-usememo-simple-expression": "Performance",
   "react-doctor/no-layout-property-animation": "Performance",
@@ -149,7 +183,6 @@ const RULE_CATEGORY_MAP: Record<string, string> = {
   "react-doctor/design-no-redundant-padding-axes": "Architecture",
   "react-doctor/design-no-redundant-size-axes": "Architecture",
   "react-doctor/design-no-space-on-flex-children": "Architecture",
-  "react-doctor/design-no-em-dash-in-jsx-text": "Architecture",
   "react-doctor/design-no-three-period-ellipsis": "Architecture",
   "react-doctor/design-no-default-tailwind-palette": "Architecture",
   "react-doctor/design-no-vague-button-label": "Accessibility",
@@ -218,18 +251,30 @@ const RULE_HELP_MAP: Record<string, string> = {
     "For derived state, compute inline: `const x = fn(dep)`. For state resets on prop change, use a key prop: `<Component key={prop} />`. See https://react.dev/learn/you-might-not-need-an-effect",
   "no-fetch-in-effect":
     "Use `useQuery()` from @tanstack/react-query, `useSWR()`, or fetch in a Server Component instead",
+  "no-mirror-prop-effect":
+    "Delete both the `useState` and the `useEffect` and read the prop directly during render. Mirroring a prop into local state forces a stale first render before the effect re-syncs",
+  "no-mutable-in-deps":
+    "Read mutable values (`location.pathname`, `ref.current`) inside the effect body instead of in the deps array, or subscribe with `useSyncExternalStore`. Mutations to these don't trigger re-renders, so listing them in deps doesn't make the effect react to changes",
   "no-cascading-set-state":
     "Combine into useReducer: `const [state, dispatch] = useReducer(reducer, initialState)`",
+  "no-effect-chain":
+    "Compute as much as possible during render (e.g. `const isGameOver = round > 5`) and write all related state inside the event handler that originally fires the chain. Each effect link adds an extra render and makes the code rigid as requirements evolve",
   "no-effect-event-handler":
     "Move the conditional logic into onClick, onChange, or onSubmit handlers directly",
+  "no-event-trigger-state":
+    "Delete the trigger state (`useState(null)` plus the `useEffect` that watches it) and call the side-effect (`post(...)` / `navigate(...)` / `track(...)`) directly inside the event handler that previously called the setter. State should not exist purely to schedule effect runs",
   "no-derived-useState":
     "Remove useState and compute the value inline: `const value = transform(propName)`",
   "no-direct-state-mutation":
     "Replace the mutation with a setter call that produces a new reference: `setItems([...items, newItem])`, `setItems(items.filter(x => x !== target))`, `setItems(items.toSorted(...))`. React only re-renders on a new reference, so in-place updates are silently dropped",
   "no-set-state-in-render":
     "Move the setter call into a `useEffect`, an event handler, or replace the state with a value computed during render. Calling a setter at render time triggers another render, which calls the setter again — an infinite loop",
+  "prefer-use-effect-event":
+    "Wrap the callback with `useEffectEvent(callback)` (React 19+) and call the resulting binding from inside the sub-handler. The Effect Event captures the latest props/state without being a reactive dep, so the effect doesn't re-subscribe on every parent render. See https://react.dev/reference/react/useEffectEvent",
   "prefer-useReducer":
     "Group related state: `const [state, dispatch] = useReducer(reducer, { field1, field2, ... })`",
+  "prefer-use-sync-external-store":
+    "Replace the `useState(getSnapshot())` + `useEffect(() => store.subscribe(() => setSnapshot(getSnapshot())))` pair with `useSyncExternalStore(store.subscribe, getSnapshot)`. The hook handles tearing during concurrent renders and SSR snapshots; the manual subscribe pattern doesn't",
   "rerender-lazy-state-init":
     "Wrap in an arrow function so it only runs once: `useState(() => expensiveComputation())`",
   "rerender-functional-setstate":
@@ -248,7 +293,15 @@ const RULE_HELP_MAP: Record<string, string> = {
   "no-many-boolean-props":
     "Split into compound components or named variants: `<Button.Primary />`, `<DialogConfirm />` instead of stacking `isPrimary`, `isConfirm` flags",
   "no-react19-deprecated-apis":
-    "Pass `ref` as a regular prop on function components — `forwardRef` is no longer needed in React 19+. Replace `useContext(X)` with `use(X)` for branch-aware context reads.",
+    "Pass `ref` as a regular prop on function components — `forwardRef` is no longer needed in React 19+. Replace `useContext(X)` with `use(X)` for branch-aware context reads. Only enabled on projects detected as React 19+.",
+  "no-legacy-class-lifecycles":
+    "Move side effects in `componentWillMount` to `componentDidMount`; replace `componentWillReceiveProps` with `componentDidUpdate` (compare prevProps) or the static `getDerivedStateFromProps` for pure state derivation; replace `componentWillUpdate` with `getSnapshotBeforeUpdate` paired with `componentDidUpdate`. The `UNSAFE_` prefix only silences the warning — React 19 removes both forms.",
+  "no-legacy-context-api":
+    "Replace `childContextTypes` + `getChildContext` with `const MyContext = createContext(...)` + `<MyContext.Provider value={...}>`; replace `contextTypes` with `static contextType = MyContext` (single context) or `useContext()` / `use()` from a function component. The provider and every consumer must migrate together — partial migrations leave consumers reading the wrong context.",
+  "no-default-props":
+    'React 19 removes `Component.defaultProps` for function components. Move the defaults into the destructured props parameter: `function Foo({ size = "md", variant = "primary" })` instead of `Foo.defaultProps = { size: "md", variant: "primary" }`.',
+  "no-react-dom-deprecated-apis":
+    "Switch the legacy `react-dom` root API (`render` / `hydrate` / `unmountComponentAtNode`) to `createRoot` / `hydrateRoot` / `root.unmount()` from `react-dom/client`. Replace `findDOMNode` with a ref. The whole `react-dom/test-utils` entry point is removed in React 19 — use `act` from `react` and `fireEvent` / `render` from `@testing-library/react`. Only enabled on projects detected as React 18+.",
   "no-render-prop-children":
     "Replace `renderXxx` props with compound subcomponents (e.g. `<Modal.Header>`) or `children` so the parent doesn't dictate every customization point",
   "no-render-in-render":
@@ -278,6 +331,8 @@ const RULE_HELP_MAP: Record<string, string> = {
     'Use a threshold/media-query hook (e.g. `useMediaQuery("(max-width: 767px)")`) — the component re-renders only when the threshold flips, not every pixel',
   "advanced-event-handler-refs":
     "Store the handler in a ref and have the listener read `handlerRef.current()` — the subscription stays put while the latest handler is always called",
+  "effect-needs-cleanup":
+    "Return a cleanup function that releases the subscription / timer: `return () => target.removeEventListener(name, handler)` for listeners, `return () => clearInterval(id)` / `clearTimeout(id)` for timers, or `return unsubscribe` if the subscribe call already returned one",
   "async-defer-await":
     "Move the `await` after the synchronous early-return guard so the skip path stays fast",
   "async-await-in-loop":
@@ -383,8 +438,6 @@ const RULE_HELP_MAP: Record<string, string> = {
     "Collapse `w-N h-N` to `size-N` (Tailwind v3.4+) when both axes match",
   "design-no-space-on-flex-children":
     "Use `gap-*` on the flex/grid parent. `space-x-*` / `space-y-*` produce phantom gaps when a sibling is conditionally rendered, lose vertical spacing on wrapped lines, and don't mirror in RTL",
-  "design-no-em-dash-in-jsx-text":
-    "Replace em dashes in JSX text with commas, colons, semicolons, periods, or parentheses — em dashes read as model-output filler",
   "design-no-three-period-ellipsis":
     'Use the typographic ellipsis "…" (or `&hellip;`) instead of three periods — pairs with action-with-followup labels ("Rename…", "Loading…")',
   "design-no-default-tailwind-palette":
@@ -573,6 +626,15 @@ const FILEPATH_WITH_LOCATION_PATTERN = /\S+\.\w+:\d+:\d+[\s\S]*$/;
 
 const REACT_COMPILER_MESSAGE = "React Compiler can't optimize this code";
 
+// HACK: `Object.hasOwn` guards against falling through to
+// `Object.prototype` when oxlint emits a rule whose name happens to
+// shadow a base Object property (`constructor`, `toString`, …). Without
+// the guard the rule's help text would render as
+// `function Object() { [native code] }`. Same defense applied to the
+// plugin-/rule-category lookups below.
+const lookupOwnString = (record: Record<string, string>, key: string): string | undefined =>
+  Object.hasOwn(record, key) ? record[key] : undefined;
+
 const cleanDiagnosticMessage = (
   message: string,
   help: string,
@@ -584,7 +646,7 @@ const cleanDiagnosticMessage = (
     return { message: REACT_COMPILER_MESSAGE, help: rawMessage || help };
   }
   const cleaned = message.replace(FILEPATH_WITH_LOCATION_PATTERN, "").trim();
-  return { message: cleaned || message, help: help || RULE_HELP_MAP[rule] || "" };
+  return { message: cleaned || message, help: help || lookupOwnString(RULE_HELP_MAP, rule) || "" };
 };
 
 const parseRuleCode = (code: string): { plugin: string; rule: string } => {
@@ -612,7 +674,11 @@ const resolvePluginPath = (): string => {
 
 const resolveDiagnosticCategory = (plugin: string, rule: string): string => {
   const ruleKey = `${plugin}/${rule}`;
-  return RULE_CATEGORY_MAP[ruleKey] ?? PLUGIN_CATEGORY_MAP[plugin] ?? "Other";
+  return (
+    lookupOwnString(RULE_CATEGORY_MAP, ruleKey) ??
+    lookupOwnString(PLUGIN_CATEGORY_MAP, plugin) ??
+    "Other"
+  );
 };
 
 // HACK: Sanitize child env so a developer's NODE_OPTIONS=--inspect (or
@@ -750,8 +816,16 @@ const parseOxlintOutput = (stdout: string): Diagnostic[] => {
   }
   const output = parsed;
 
+  // HACK: oxlint reports diagnostics for every JS/TS extension it
+  // scanned (`.ts`, `.tsx`, `.js`, `.jsx`). The previous filter only
+  // kept `.tsx` / `.jsx` — fine when react-doctor's curated rules were
+  // the only sources (they're React-specific anyway), but adopted
+  // user rules like `eslint/no-debugger` or `unicorn/*` typically
+  // fire on plain `.ts` / `.js` files; dropping those silently
+  // erased their score impact. SOURCE_FILE_PATTERN matches the same
+  // extensions we count as source files everywhere else.
   return output.diagnostics
-    .filter((diagnostic) => diagnostic.code && JSX_FILE_PATTERN.test(diagnostic.filename))
+    .filter((diagnostic) => diagnostic.code && SOURCE_FILE_PATTERN.test(diagnostic.filename))
     .map((diagnostic) => {
       const { plugin, rule } = parseRuleCode(diagnostic.code);
       const primaryLabel = diagnostic.labels[0];
@@ -765,6 +839,7 @@ const parseOxlintOutput = (stdout: string): Diagnostic[] => {
         severity: diagnostic.severity,
         message: cleaned.message,
         help: cleaned.help,
+        url: diagnostic.url,
         line: primaryLabel?.span.line ?? 0,
         column: primaryLabel?.span.column ?? 0,
         category: resolveDiagnosticCategory(plugin, rule),
@@ -785,21 +860,13 @@ const resolveTsConfigRelativePath = (rootDirectory: string): string | null => {
 
 interface RunOxlintOptions {
   rootDirectory: string;
-  hasTypeScript: boolean;
-  framework: Framework;
-  hasReactCompiler: boolean;
-  hasTanStackQuery: boolean;
+  project: ProjectInfo;
   includePaths?: string[];
   nodeBinaryPath?: string;
   customRulesOnly?: boolean;
-  /**
-   * When `true` (default), pre-existing `// eslint-disable*` / `// oxlint-disable*`
-   * comments in source files are LEFT ALONE — oxlint will apply them
-   * normally, suppressing react-doctor diagnostics on those lines.
-   * When `false`, those comment markers are temporarily neutralized
-   * so react-doctor sees through every prior suppression (audit mode).
-   */
   respectInlineDisables?: boolean;
+  adoptExistingLintConfig?: boolean;
+  ignoredTags?: ReadonlySet<string>;
 }
 
 let didValidateRuleRegistration = false;
@@ -809,21 +876,28 @@ const validateRuleRegistration = (): void => {
   didValidateRuleRegistration = true;
   const missingHelp: string[] = [];
   const missingCategory: string[] = [];
+  const missingMetadata: string[] = [];
   for (const fullKey of ALL_REACT_DOCTOR_RULE_KEYS) {
     const ruleName = fullKey.replace(/^react-doctor\//, "");
-    if (!(fullKey in RULE_CATEGORY_MAP)) {
+    if (!Object.hasOwn(RULE_CATEGORY_MAP, fullKey)) {
       missingCategory.push(fullKey);
     }
-    if (!(ruleName in RULE_HELP_MAP)) {
+    if (!Object.hasOwn(RULE_HELP_MAP, ruleName)) {
       missingHelp.push(fullKey);
     }
+    if (FRAMEWORK_SPECIFIC_RULE_KEYS.has(fullKey) && !RULE_METADATA.has(fullKey)) {
+      missingMetadata.push(fullKey);
+    }
   }
-  if (missingCategory.length > 0 || missingHelp.length > 0) {
+  if (missingCategory.length > 0 || missingHelp.length > 0 || missingMetadata.length > 0) {
     const detail = [
       missingCategory.length > 0
         ? `Missing RULE_CATEGORY_MAP entries: ${missingCategory.join(", ")}`
         : null,
       missingHelp.length > 0 ? `Missing RULE_HELP_MAP entries: ${missingHelp.join(", ")}` : null,
+      missingMetadata.length > 0
+        ? `Missing RULE_METADATA entries: ${missingMetadata.join(", ")}`
+        : null,
     ]
       .filter((entry): entry is string => entry !== null)
       .join("; ");
@@ -835,14 +909,13 @@ const validateRuleRegistration = (): void => {
 export const runOxlint = async (options: RunOxlintOptions): Promise<Diagnostic[]> => {
   const {
     rootDirectory,
-    hasTypeScript,
-    framework,
-    hasReactCompiler,
-    hasTanStackQuery,
+    project,
     includePaths,
     nodeBinaryPath = process.execPath,
     customRulesOnly = false,
     respectInlineDisables = true,
+    adoptExistingLintConfig = true,
+    ignoredTags = new Set<string>(),
   } = options;
 
   validateRuleRegistration();
@@ -854,12 +927,32 @@ export const runOxlint = async (options: RunOxlintOptions): Promise<Diagnostic[]
   const configDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "react-doctor-oxlintrc-"));
   const configPath = path.join(configDirectory, "oxlintrc.json");
   const pluginPath = resolvePluginPath();
+  // HACK: pass user lint configs to oxlint as absolute paths. oxlint's
+  // docs say `extends` is "resolved relative to the configuration file
+  // that declares extends," but a literal `path.relative(configDir, ...)`
+  // breaks when the OS resolves symlinked tmp dirs (e.g. macOS's
+  // `/var/folders/.../T/...` actually lives under `/private/var/...`,
+  // so a `../../../...` walk from the symlink view doesn't equal the
+  // same walk from the canonical view and oxlint's NotFound errors
+  // out). Absolute paths sidestep the whole symlink dance — oxlint
+  // accepts them and they're stable across runtimes. We skip extends
+  // entirely under `customRulesOnly` because that mode opts out of
+  // every rule outside the react-doctor plugin.
+  const detectedConfigPaths =
+    adoptExistingLintConfig && !customRulesOnly ? detectUserLintConfigPaths(rootDirectory) : [];
+  // HACK: filter out `.eslintrc.json` files whose `extends` lists only
+  // bare-package refs (`"next"`, `"airbnb"`, `"plugin:foo/bar"`). oxlint's
+  // resolver can't follow those — adopting them guarantees the parser
+  // crash + misleading "could not adopt existing lint config" warning.
+  // Drop them up front so the scan starts in the same state the fallback
+  // would land in, with no stderr noise.
+  const extendsPaths = detectedConfigPaths.filter(canOxlintExtendConfig);
   const config = createOxlintConfig({
     pluginPath,
-    framework,
-    hasReactCompiler,
-    hasTanStackQuery,
+    project,
     customRulesOnly,
+    extendsPaths,
+    ignoredTags,
   });
   // HACK: only neutralize disable comments in audit mode. Default
   // behavior respects the user's existing `// eslint-disable*` /
@@ -869,17 +962,10 @@ export const runOxlint = async (options: RunOxlintOptions): Promise<Diagnostic[]
     : neutralizeDisableDirectives(rootDirectory, includePaths);
 
   try {
-    const fileHandle = fs.openSync(configPath, "wx", 0o600);
-    try {
-      fs.writeFileSync(fileHandle, JSON.stringify(config));
-    } finally {
-      fs.closeSync(fileHandle);
-    }
-
     const oxlintBinary = resolveOxlintBinary();
     const baseArgs = [oxlintBinary, "-c", configPath, "--format", "json"];
 
-    if (hasTypeScript) {
+    if (project.hasTypeScript) {
       const tsconfigRelativePath = resolveTsConfigRelativePath(rootDirectory);
       if (tsconfigRelativePath) {
         baseArgs.push("--tsconfig", tsconfigRelativePath);
@@ -903,14 +989,54 @@ export const runOxlint = async (options: RunOxlintOptions): Promise<Diagnostic[]
     const fileBatches =
       includePaths !== undefined ? batchIncludePaths(baseArgs, includePaths) : [["."]];
 
-    const allDiagnostics: Diagnostic[] = [];
-    for (const batch of fileBatches) {
-      const batchArgs = [...baseArgs, ...batch];
-      const stdout = await spawnOxlint(batchArgs, rootDirectory, nodeBinaryPath);
-      allDiagnostics.push(...parseOxlintOutput(stdout));
-    }
+    const writeOxlintConfig = (configToWrite: ReturnType<typeof createOxlintConfig>): void => {
+      // HACK: fs.rm + open(wx) (instead of plain open(w)) so we keep
+      // the original "fail if a stale file exists at this exact path"
+      // safety net while still allowing the retry-without-extends
+      // fallback below to overwrite our own config in place.
+      fs.rmSync(configPath, { force: true });
+      const fileHandle = fs.openSync(configPath, "wx", 0o600);
+      try {
+        fs.writeFileSync(fileHandle, JSON.stringify(configToWrite));
+      } finally {
+        fs.closeSync(fileHandle);
+      }
+    };
 
-    return allDiagnostics;
+    const spawnLintBatches = async (): Promise<Diagnostic[]> => {
+      const allDiagnostics: Diagnostic[] = [];
+      for (const batch of fileBatches) {
+        const batchArgs = [...baseArgs, ...batch];
+        const stdout = await spawnOxlint(batchArgs, rootDirectory, nodeBinaryPath);
+        allDiagnostics.push(...parseOxlintOutput(stdout));
+      }
+      return allDiagnostics;
+    };
+
+    writeOxlintConfig(config);
+    try {
+      return await spawnLintBatches();
+    } catch (error) {
+      // HACK: if the user's adopted lint config is the reason oxlint
+      // crashed (broken JSON, missing plugin, unknown rule), failing
+      // the entire lint pass would leave the user with a 100/100
+      // score off zero diagnostics — a worse outcome than running our
+      // curated rules without their extras. Retry once without
+      // `extends` and keep the scan useful. The retry is silent: a
+      // mid-output stderr warning was noisy enough that users took it
+      // as react-doctor itself crashing; the curated-rules scan is the
+      // graceful path.
+      if (extendsPaths.length === 0) throw error;
+      const fallbackConfig = createOxlintConfig({
+        pluginPath,
+        project,
+        customRulesOnly,
+        extendsPaths: [],
+        ignoredTags,
+      });
+      writeOxlintConfig(fallbackConfig);
+      return await spawnLintBatches();
+    }
   } finally {
     restoreDisableDirectives();
     fs.rmSync(configDirectory, { recursive: true, force: true });

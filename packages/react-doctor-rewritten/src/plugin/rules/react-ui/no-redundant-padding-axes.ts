@@ -1,0 +1,40 @@
+import { PADDING_HORIZONTAL_AXIS_PATTERN, PADDING_VERTICAL_AXIS_PATTERN } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+import { getClassNameLiteral } from "./utils/get-class-name-literal.js";
+import { collectAxisShorthandPairs } from "./utils/collect-axis-shorthand-pairs.js";
+import { hasResponsivePrefix } from "./utils/has-responsive-prefix.js";
+
+export const noRedundantPaddingAxes = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    JSXAttribute(jsxAttribute: EsTreeNode) {
+      if (jsxAttribute.name?.type !== "JSXIdentifier" || jsxAttribute.name.name !== "className") {
+        return;
+      }
+      const classNameLiteral = getClassNameLiteral(jsxAttribute);
+      if (!classNameLiteral) return;
+      // Per-breakpoint variation is a legit reason to keep the axes split.
+      if (
+        hasResponsivePrefix(classNameLiteral, "px") ||
+        hasResponsivePrefix(classNameLiteral, "py")
+      ) {
+        return;
+      }
+      const matchedPairs = collectAxisShorthandPairs(
+        classNameLiteral,
+        PADDING_HORIZONTAL_AXIS_PATTERN,
+        PADDING_VERTICAL_AXIS_PATTERN,
+      );
+      if (matchedPairs.length === 0) return;
+
+      for (const matchedPair of matchedPairs) {
+        context.report({
+          node: jsxAttribute,
+          message: `px-${matchedPair.value} py-${matchedPair.value} → use the shorthand p-${matchedPair.value}`,
+        });
+      }
+    },
+  }),
+});

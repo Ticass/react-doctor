@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { matchGlobPattern } from "../src/utils/match-glob-pattern.js";
+import { compileGlobPattern } from "../src/utils/match-glob-pattern.js";
 
-describe("matchGlobPattern", () => {
+const matchGlobPattern = (filePath: string, pattern: string): boolean =>
+  compileGlobPattern(pattern).test(filePath.replace(/\\/g, "/"));
+
+describe("compileGlobPattern", () => {
   it("matches exact file paths", () => {
     expect(matchGlobPattern("src/app.tsx", "src/app.tsx")).toBe(true);
     expect(matchGlobPattern("src/app.tsx", "src/other.tsx")).toBe(false);

@@ -1,0 +1,25 @@
+import { OG_ROUTE_PATTERN } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const nextjsNoImgElement = defineRule<Rule>({
+  create: (context: RuleContext) => {
+    const filename = context.getFilename?.() ?? "";
+    const isOgRoute = OG_ROUTE_PATTERN.test(filename);
+
+    return {
+      JSXOpeningElement(node: EsTreeNode) {
+        if (isOgRoute) return;
+        if (node.name?.type === "JSXIdentifier" && node.name.name === "img") {
+          context.report({
+            node,
+            message:
+              "Use next/image instead of <img> — provides automatic optimization, lazy loading, and responsive srcset",
+          });
+        }
+      },
+    };
+  },
+});

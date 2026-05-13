@@ -19,7 +19,17 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { ReactDoctorConfig } from "../../src/types.js";
 import { checkReducedMotion } from "../../src/utils/check-reduced-motion.js";
 import { filterIgnoredDiagnostics } from "../../src/utils/filter-diagnostics.js";
-import { buildDiagnostic, initGitRepo, writeFile, writeJson } from "./_helpers.js";
+import { mergeAndFilterDiagnostics } from "../../src/utils/merge-and-filter-diagnostics.js";
+import { runOxlint } from "../../src/utils/run-oxlint.js";
+import { createNodeReadFileLinesSync } from "../../src/utils/read-file-lines-node.js";
+import {
+  buildDiagnostic,
+  buildTestProject,
+  initGitRepo,
+  setupReactProject,
+  writeFile,
+  writeJson,
+} from "./_helpers.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rd-rn-motion-"));
 
@@ -86,6 +96,132 @@ describe("issue #93 + #100: textComponents allowlists custom RN text wrappers", 
       stubReadFileLines(file),
     );
     expect(filtered).toHaveLength(1);
+  });
+});
+
+describe("issue #183: rawTextWrapperComponents suppresses string-only wrapper children", () => {
+  it("suppresses raw string children inside configured raw text wrappers", () => {
+    const config: ReactDoctorConfig = { rawTextWrapperComponents: ["Button"] };
+    const file = `<Button>Cancel</Button>\n`;
+    const filtered = filterIgnoredDiagnostics(
+      [buildRnTextDiagnostic({ line: 1 })],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(0);
+  });
+
+  it("suppresses raw template-literal children inside configured raw text wrappers", () => {
+    const config: ReactDoctorConfig = { rawTextWrapperComponents: ["Button"] };
+    const file = "<Button>{`Save changes`}</Button>\n";
+    const filtered = filterIgnoredDiagnostics(
+      [buildRnTextDiagnostic({ line: 1 })],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(0);
+  });
+
+  it("recognizes wrappers by their LEAF name when the JSX uses a member expression", () => {
+    const config: ReactDoctorConfig = { rawTextWrapperComponents: ["Button"] };
+    const file = `<HeroUi.Button>Cancel</HeroUi.Button>\n`;
+    const filtered = filterIgnoredDiagnostics(
+      [buildRnTextDiagnostic({ line: 1 })],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(0);
+  });
+
+  it("still reports raw text inside a wrapper that ALSO contains a JSX child element", () => {
+    const config: ReactDoctorConfig = { rawTextWrapperComponents: ["Button"] };
+    const file = `<Button>\n  Save\n  <Icon />\n</Button>\n`;
+    const filtered = filterIgnoredDiagnostics(
+      [buildRnTextDiagnostic({ line: 2 })],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(1);
+  });
+
+  it("does not affect wrappers that aren't listed", () => {
+    const config: ReactDoctorConfig = { rawTextWrapperComponents: ["Button"] };
+    const file = `<Card>Cancel</Card>\n`;
+    const filtered = filterIgnoredDiagnostics(
+      [buildRnTextDiagnostic({ line: 1 })],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(1);
+  });
+
+  it("does NOT suppress raw text whose enclosing parent is a non-wrapper, even when a SIBLING is a configured wrapper (closed-sibling regression)", () => {
+    const config: ReactDoctorConfig = { rawTextWrapperComponents: ["Button"] };
+    const file = `<View>\n  <Button>Inner</Button>\n  Save\n</View>\n`;
+    const filtered = filterIgnoredDiagnostics(
+      [buildRnTextDiagnostic({ line: 3 })],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(1);
+  });
+
+  it("end-to-end: a real oxlint run on a React Native project gets its rn-no-raw-text diagnostics suppressed when `rawTextWrapperComponents` matches", async () => {
+    const projectDir = setupReactProject(tempRoot, "issue-183-e2e", {
+      packageJsonExtras: { dependencies: { react: "^19.0.0", "react-native": "0.76.0" } },
+      files: {
+        "src/App.tsx": `export const App = () => <Button>Cancel</Button>;\n`,
+      },
+    });
+
+    const rawDiagnostics = await runOxlint({
+      rootDirectory: projectDir,
+      project: buildTestProject({
+        rootDirectory: projectDir,
+        framework: "react-native",
+      }),
+    });
+    const rnRawTextDiagnostics = rawDiagnostics.filter(
+      (diagnostic) => diagnostic.rule === "rn-no-raw-text",
+    );
+    expect(rnRawTextDiagnostics.length).toBeGreaterThan(0);
+
+    const filtered = mergeAndFilterDiagnostics(
+      rawDiagnostics,
+      projectDir,
+      { rawTextWrapperComponents: ["Button"] },
+      createNodeReadFileLinesSync(projectDir),
+    );
+    const remainingRnRawText = filtered.filter(
+      (diagnostic) => diagnostic.rule === "rn-no-raw-text",
+    );
+    expect(remainingRnRawText).toHaveLength(0);
+  });
+
+  it("composes with textComponents (each suppresses its own diagnostics)", () => {
+    const config: ReactDoctorConfig = {
+      textComponents: ["Typography"],
+      rawTextWrapperComponents: ["Button"],
+    };
+    const file = `<Typography>Hello</Typography>\n<Button>Cancel</Button>\n<View>Bad</View>\n`;
+    const filtered = filterIgnoredDiagnostics(
+      [
+        buildRnTextDiagnostic({ line: 1 }),
+        buildRnTextDiagnostic({ line: 2 }),
+        buildRnTextDiagnostic({ line: 3 }),
+      ],
+      config,
+      VIRTUAL_ROOT,
+      stubReadFileLines(file),
+    );
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].line).toBe(3);
   });
 });
 

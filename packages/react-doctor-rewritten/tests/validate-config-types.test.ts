@@ -35,6 +35,17 @@ describe("validateConfigTypes", () => {
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("respectInlineDisables"));
   });
 
+  it("passes through adoptExistingLintConfig and coerces stringy variants", () => {
+    expect(validateConfigTypes({ adoptExistingLintConfig: false }).adoptExistingLintConfig).toBe(
+      false,
+    );
+    expect(
+      validateConfigTypes({ adoptExistingLintConfig: "false" as unknown as boolean })
+        .adoptExistingLintConfig,
+    ).toBe(false);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("adoptExistingLintConfig"));
+  });
+
   it('coerces the string `"false"` to boolean false and writes to stderr', () => {
     const result = validateConfigTypes({
       respectInlineDisables: "false" as unknown as boolean,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { NoReactDependencyError, ProjectNotFoundError } from "./errors.js";
 import type {
   Diagnostic,
   DiagnoseOptions,
@@ -14,18 +15,21 @@ import type {
   ReactDoctorConfig,
   ScoreResult,
 } from "./types.js";
-import { diagnoseCore } from "./core/diagnose-core.js";
-import { computeJsxIncludePaths } from "./utils/jsx-include-paths.js";
 import { buildJsonReport } from "./utils/build-json-report.js";
 import { buildJsonReportError } from "./utils/build-json-report-error.js";
+import { calculateScore } from "./utils/calculate-score.js";
 import { checkReducedMotion } from "./utils/check-reduced-motion.js";
 import { clearIgnorePatternsCache } from "./utils/collect-ignore-patterns.js";
+import { clearAutoSuppressionCaches } from "./utils/merge-and-filter-diagnostics.js";
 import { clearProjectCache, discoverProject } from "./utils/discover-project.js";
-import { clearConfigCache, loadConfig } from "./utils/load-config.js";
+import { computeJsxIncludePaths } from "./utils/jsx-include-paths.js";
+import { clearConfigCache, loadConfigWithSource } from "./utils/load-config.js";
+import { mergeAndFilterDiagnostics } from "./utils/merge-and-filter-diagnostics.js";
 import { clearPackageJsonCache } from "./utils/read-package-json.js";
 import { createNodeReadFileLinesSync } from "./utils/read-file-lines-node.js";
+import { resolveConfigRootDir } from "./utils/resolve-config-root-dir.js";
+import { resolveDiagnoseTarget } from "./utils/resolve-diagnose-target.js";
 import { resolveLintIncludePaths } from "./utils/resolve-lint-include-paths.js";
-import { calculateScore } from "./utils/calculate-score-node.js";
 import { runKnip } from "./utils/run-knip.js";
 import { runOxlint } from "./utils/run-oxlint.js";
 
@@ -44,11 +48,19 @@ export type {
   ReactDoctorConfig,
   ScoreResult,
 };
-export type { NoBrandingThread } from "./types.js";
 export { getDiffInfo, filterSourceFiles } from "./utils/get-diff-files.js";
 export { summarizeDiagnostics } from "./utils/summarize-diagnostics.js";
-export { buildJsonReport, buildJsonReportError };
+export type { NoBrandingThread } from "./types.js";
 export { buildNoBrandingReport } from "./utils/no-branding-diagnostics.js";
+export { buildJsonReport, buildJsonReportError };
+export {
+  ReactDoctorError,
+  ProjectNotFoundError,
+  NoReactDependencyError,
+  PackageJsonNotFoundError,
+  AmbiguousProjectError,
+  isReactDoctorError,
+} from "./errors.js";
 
 // HACK: programmatic API consumers (watch-mode tools, test runners,
 // agentic CLI flows) call diagnose() repeatedly on the same directory.
@@ -60,6 +72,7 @@ export const clearCaches = (): void => {
   clearConfigCache();
   clearPackageJsonCache();
   clearIgnorePatternsCache();
+  clearAutoSuppressionCaches();
 };
 
 interface ToJsonReportOptions {
@@ -89,42 +102,104 @@ export const toJsonReport = (result: DiagnoseResult, options: ToJsonReportOption
     totalElapsedMilliseconds: result.elapsedMilliseconds,
   });
 
+const EMPTY_DIAGNOSTICS: Diagnostic[] = [];
+
+const settledOrEmpty = <T extends Diagnostic[]>(
+  settled: PromiseSettledResult<T>,
+  label: string,
+): T | Diagnostic[] => {
+  if (settled.status === "fulfilled") return settled.value;
+  console.error(`${label} rejected:`, settled.reason);
+  return EMPTY_DIAGNOSTICS;
+};
+
 export const diagnose = async (
   directory: string,
   options: DiagnoseOptions = {},
 ): Promise<DiagnoseResult> => {
-  const resolvedDirectory = path.resolve(directory);
-  const userConfig = loadConfig(resolvedDirectory);
+  const startTime = globalThis.performance.now();
+  const requestedDirectory = path.resolve(directory);
+
+  // Load config first against the requested directory so a `rootDir`
+  // redirect applies BEFORE we hunt for nested React subprojects. This
+  // is the documented escape hatch for monorepos that hold the only
+  // react-doctor config at the repo root but want scans to target a
+  // subproject like `apps/web`.
+  const initialLoadedConfig = loadConfigWithSource(requestedDirectory);
+  const redirectedDirectory = resolveConfigRootDir(
+    initialLoadedConfig?.config ?? null,
+    initialLoadedConfig?.sourceDirectory ?? null,
+  );
+  const directoryAfterRedirect = redirectedDirectory ?? requestedDirectory;
+
+  const resolvedDirectory = resolveDiagnoseTarget(directoryAfterRedirect);
+  if (!resolvedDirectory) {
+    throw new ProjectNotFoundError(directoryAfterRedirect);
+  }
+
+  const userConfig =
+    initialLoadedConfig?.config ?? loadConfigWithSource(resolvedDirectory)?.config ?? null;
   const includePaths = options.includePaths ?? [];
   const isDiffMode = includePaths.length > 0;
+  const projectInfo = discoverProject(resolvedDirectory);
+
+  if (!projectInfo.reactVersion) {
+    throw new NoReactDependencyError(resolvedDirectory);
+  }
+
   const lintIncludePaths =
     computeJsxIncludePaths(includePaths) ?? resolveLintIncludePaths(resolvedDirectory, userConfig);
   const readFileLinesSync = createNodeReadFileLinesSync(resolvedDirectory);
 
-  return diagnoseCore(
-    {
-      rootDirectory: resolvedDirectory,
-      readFileLinesSync,
-      loadUserConfig: () => userConfig,
-      discoverProjectInfo: () => discoverProject(resolvedDirectory),
-      calculateDiagnosticsScore: calculateScore,
-      getExtraDiagnostics: () => (isDiffMode ? [] : checkReducedMotion(resolvedDirectory)),
-      createRunners: ({ resolvedDirectory: projectRoot, projectInfo, userConfig: config }) => ({
-        runLint: () =>
-          runOxlint({
-            rootDirectory: projectRoot,
-            hasTypeScript: projectInfo.hasTypeScript,
-            framework: projectInfo.framework,
-            hasReactCompiler: projectInfo.hasReactCompiler,
-            hasTanStackQuery: projectInfo.hasTanStackQuery,
-            includePaths: lintIncludePaths,
-            customRulesOnly: config?.customRulesOnly ?? false,
-            respectInlineDisables:
-              options.respectInlineDisables ?? config?.respectInlineDisables ?? true,
-          }),
-        runDeadCode: () => runKnip(projectRoot),
-      }),
-    },
-    { ...options, lintIncludePaths },
+  const effectiveLint = options.lint ?? userConfig?.lint ?? true;
+  const effectiveDeadCode = options.deadCode ?? userConfig?.deadCode ?? true;
+  const effectiveRespectInlineDisables =
+    options.respectInlineDisables ?? userConfig?.respectInlineDisables ?? true;
+
+  const ignoredTags = new Set<string>(userConfig?.ignore?.tags ?? []);
+
+  const lintPromise = effectiveLint
+    ? runOxlint({
+        rootDirectory: resolvedDirectory,
+        project: projectInfo,
+        includePaths: lintIncludePaths,
+        customRulesOnly: userConfig?.customRulesOnly ?? false,
+        respectInlineDisables: effectiveRespectInlineDisables,
+        adoptExistingLintConfig: userConfig?.adoptExistingLintConfig ?? true,
+        ignoredTags,
+      }).catch((error: unknown) => {
+        console.error("Lint failed:", error);
+        return EMPTY_DIAGNOSTICS;
+      })
+    : Promise.resolve(EMPTY_DIAGNOSTICS);
+
+  const deadCodePromise =
+    effectiveDeadCode && !isDiffMode
+      ? runKnip(resolvedDirectory, userConfig?.entryFiles).catch((error: unknown) => {
+          console.error("Dead code analysis failed:", error);
+          return EMPTY_DIAGNOSTICS;
+        })
+      : Promise.resolve(EMPTY_DIAGNOSTICS);
+
+  // HACK: both runners catch their own errors today, but `Promise.allSettled`
+  // is the load-bearing safety net for the case where a future runner
+  // is refactored without a `.catch()`. Surfacing the rejection via
+  // `console.error` and returning [] keeps `diagnose()` resilient and
+  // is cheaper than a second look at the bug-report log.
+  const [lintSettled, deadCodeSettled] = await Promise.allSettled([lintPromise, deadCodePromise]);
+  const lintDiagnostics = settledOrEmpty(lintSettled, "Lint");
+  const deadCodeDiagnostics = settledOrEmpty(deadCodeSettled, "Dead code");
+  const environmentDiagnostics = isDiffMode ? [] : checkReducedMotion(resolvedDirectory);
+
+  const diagnostics = mergeAndFilterDiagnostics(
+    [...lintDiagnostics, ...deadCodeDiagnostics, ...environmentDiagnostics],
+    resolvedDirectory,
+    userConfig,
+    readFileLinesSync,
+    { respectInlineDisables: effectiveRespectInlineDisables },
   );
+  const elapsedMilliseconds = globalThis.performance.now() - startTime;
+  const score = await calculateScore(diagnostics);
+
+  return { diagnostics, score, project: projectInfo, elapsedMilliseconds };
 };

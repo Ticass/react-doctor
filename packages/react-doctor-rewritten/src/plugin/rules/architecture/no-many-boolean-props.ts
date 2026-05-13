@@ -1,0 +1,90 @@
+import { BOOLEAN_PROP_THRESHOLD } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { isComponentAssignment } from "../../utils/is-component-assignment.js";
+import { isComponentDeclaration } from "../../utils/is-component-declaration.js";
+import { walkAst } from "../../utils/walk-ast.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+const BOOLEAN_PROP_PREFIX_PATTERN = /^(?:is|has|should|can|show|hide|enable|disable|with)[A-Z]/;
+
+const collectBooleanLikePropsFromBody = (
+  componentBody: EsTreeNode | undefined,
+  propsParamName: string,
+): Set<string> => {
+  const found = new Set<string>();
+  if (!componentBody) return found;
+  walkAst(componentBody, (child: EsTreeNode) => {
+    if (child.type !== "MemberExpression") return;
+    if (child.computed) return;
+    if (child.object?.type !== "Identifier") return;
+    if (child.object.name !== propsParamName) return;
+    if (child.property?.type !== "Identifier") return;
+    if (!BOOLEAN_PROP_PREFIX_PATTERN.test(child.property.name)) return;
+    found.add(child.property.name);
+  });
+  return found;
+};
+
+// HACK: components with many boolean props (isLoading, hasIcon, showHeader,
+// canEdit...) typically signal "many UI variants jammed into one component"
+// — a sign that the component should be split via composition (compound
+// components, explicit variant components). We use a name-based heuristic
+// because TypeScript types aren't visible at this AST layer. Detects
+// both destructured form (`{ isPrimary, hasIcon }`) and non-destructured
+// (`function Foo(props) { props.isPrimary }`) by walking member-access
+// patterns on the parameter binding.
+export const noManyBooleanProps = defineRule<Rule>({
+  create: (context: RuleContext) => {
+    const reportIfMany = (
+      booleanLikePropNames: string[],
+      componentName: string,
+      reportNode: EsTreeNode,
+    ): void => {
+      if (booleanLikePropNames.length >= BOOLEAN_PROP_THRESHOLD) {
+        context.report({
+          node: reportNode,
+          message: `Component "${componentName}" takes ${booleanLikePropNames.length} boolean-like props (${booleanLikePropNames.slice(0, 3).join(", ")}…) — consider compound components or explicit variants instead of stacking flags`,
+        });
+      }
+    };
+
+    const checkComponent = (
+      param: EsTreeNode | undefined,
+      body: EsTreeNode | undefined,
+      componentName: string,
+      reportNode: EsTreeNode,
+    ): void => {
+      if (!param) return;
+      if (param.type === "ObjectPattern") {
+        const booleanLikePropNames: string[] = [];
+        for (const property of param.properties ?? []) {
+          if (property.type !== "Property") continue;
+          const keyName = property.key?.type === "Identifier" ? property.key.name : null;
+          if (!keyName) continue;
+          if (BOOLEAN_PROP_PREFIX_PATTERN.test(keyName)) {
+            booleanLikePropNames.push(keyName);
+          }
+        }
+        reportIfMany(booleanLikePropNames, componentName, reportNode);
+        return;
+      }
+      if (param.type === "Identifier") {
+        const accessed = collectBooleanLikePropsFromBody(body, param.name);
+        reportIfMany([...accessed], componentName, reportNode);
+      }
+    };
+
+    return {
+      FunctionDeclaration(node: EsTreeNode) {
+        if (!isComponentDeclaration(node)) return;
+        checkComponent(node.params?.[0], node.body, node.id.name, node.id);
+      },
+      VariableDeclarator(node: EsTreeNode) {
+        if (!isComponentAssignment(node)) return;
+        checkComponent(node.init?.params?.[0], node.init?.body, node.id.name, node.id);
+      },
+    };
+  },
+});

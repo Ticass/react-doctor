@@ -1,6 +1,6 @@
 {
   "name": "react-doctor-rewritten",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Diagnose and fix React codebases for security, performance, correctness, accessibility, bundle-size, and architecture issues (fork of millionco/react-doctor with --hide-branding HTML report for CI).",
   "keywords": [
     "accessibility",
@@ -51,6 +51,10 @@
     "./oxlint-plugin": {
       "types": "./dist/react-doctor-plugin.d.ts",
       "default": "./dist/react-doctor-plugin.js"
+    },
+    "./eslint-plugin": {
+      "types": "./dist/eslint-plugin.d.ts",
+      "default": "./dist/eslint-plugin.js"
     }
   },
   "scripts": {
@@ -64,20 +68,27 @@
     "commander": "^14.0.3",
     "knip": "^6.10.0",
     "ora": "^9.4.0",
-    "oxlint": "^1.62.0",
+    "oxlint": "^1.63.0",
     "picocolors": "^1.1.1",
     "prompts": "^2.4.2",
     "typescript": ">=5.0.4 <7"
   },
   "devDependencies": {
     "@types/prompts": "^2.4.9",
+    "@typescript-eslint/types": "^8.59.3",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-you-might-not-need-an-effect": "^0.10.1",
     "tsdown": "^0.20.3"
   },
   "peerDependencies": {
-    "eslint-plugin-react-hooks": "^6 || ^7"
+    "eslint-plugin-react-hooks": "^6 || ^7",
+    "eslint-plugin-react-you-might-not-need-an-effect": "^0.10"
   },
   "peerDependenciesMeta": {
     "eslint-plugin-react-hooks": {
+      "optional": true
+    },
+    "eslint-plugin-react-you-might-not-need-an-effect": {
       "optional": true
     }
   },

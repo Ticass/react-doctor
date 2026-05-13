@@ -1,0 +1,22 @@
+import { defineRule } from "../../utils/define-rule.js";
+import { hasJsxAttribute } from "../../utils/has-jsx-attribute.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const nextjsImageMissingSizes = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    JSXOpeningElement(node: EsTreeNode) {
+      if (node.name?.type !== "JSXIdentifier" || node.name.name !== "Image") return;
+      const attributes = node.attributes ?? [];
+      if (!hasJsxAttribute(attributes, "fill")) return;
+      if (hasJsxAttribute(attributes, "sizes")) return;
+
+      context.report({
+        node,
+        message:
+          "next/image with fill but no sizes — the browser downloads the largest image. Add a sizes attribute for responsive behavior",
+      });
+    },
+  }),
+});

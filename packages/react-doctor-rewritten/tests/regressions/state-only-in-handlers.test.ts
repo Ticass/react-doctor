@@ -22,7 +22,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { runOxlint } from "../../src/utils/run-oxlint.js";
-import { setupReactProject } from "./_helpers.js";
+import { buildTestProject, setupReactProject } from "./_helpers.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rd-state-only-in-handlers-"));
 
@@ -70,10 +70,7 @@ export const Search = () => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     expect(findStateOnlyInHandlersDiagnostics(diagnostics, "src/search.tsx")).toHaveLength(0);
@@ -100,10 +97,7 @@ export const Preview = ({ mime, src }: { mime: string; src: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     expect(findStateOnlyInHandlersDiagnostics(diagnostics, "src/preview.tsx")).toHaveLength(0);
@@ -145,10 +139,7 @@ export const DesktopUpdaterProvider = ({
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     expect(findStateOnlyInHandlersDiagnostics(diagnostics, "src/desktop-updater.tsx")).toHaveLength(
@@ -202,10 +193,7 @@ export const ExceptionDetailDrawer = ({
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     expect(
@@ -234,10 +222,7 @@ export const ScrollTracker = () => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     expect(

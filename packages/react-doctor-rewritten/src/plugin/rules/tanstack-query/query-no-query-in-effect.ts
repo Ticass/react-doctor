@@ -1,0 +1,33 @@
+import { EFFECT_HOOK_NAMES } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { getEffectCallback } from "../../utils/get-effect-callback.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import { walkAst } from "../../utils/walk-ast.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const queryNoQueryInEffect = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNode) {
+      if (!isHookCall(node, EFFECT_HOOK_NAMES)) return;
+
+      const callback = getEffectCallback(node);
+      if (!callback) return;
+
+      walkAst(callback, (child: EsTreeNode) => {
+        if (child.type !== "CallExpression") return;
+
+        const calleeName = child.callee?.type === "Identifier" ? child.callee.name : null;
+
+        if (calleeName === "refetch") {
+          context.report({
+            node: child,
+            message:
+              "refetch() inside useEffect — React Query manages refetching automatically. Use queryKey dependencies or the enabled option instead",
+          });
+        }
+      });
+    },
+  }),
+});

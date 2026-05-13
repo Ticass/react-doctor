@@ -14,10 +14,6 @@ export const SCORE_OK_THRESHOLD = 50;
 
 export const SCORE_BAR_WIDTH_CHARS = 50;
 
-export const SUMMARY_BOX_HORIZONTAL_PADDING_CHARS = 1;
-
-export const SUMMARY_BOX_OUTER_INDENT_CHARS = 2;
-
 export const SCORE_API_URL = "https://www.react.doctor/api/score";
 
 export const SHARE_BASE_URL = "https://www.react.doctor/share";
@@ -53,13 +49,33 @@ export const KNIP_CONFIG_LOCATIONS = [
   "knip.config.js",
 ];
 
+// JSON-format oxlint / eslint configs react-doctor can fold into the
+// scan via oxlint's `extends` field. JS / TS configs need a runtime
+// to evaluate and aren't supported by oxlint's `extends`. Listed in
+// detection priority order — oxlint native first, eslint legacy as a
+// compatibility fallback. Also used by tests as the source of truth.
+export const ADOPTABLE_LINT_CONFIG_FILENAMES = [".oxlintrc.json", ".eslintrc.json"];
+
 export const OXLINT_NODE_REQUIREMENT = "^20.19.0 || >=22.12.0";
 
 export const OXLINT_RECOMMENDED_NODE_MAJOR = 24;
 
 export const GIT_SHOW_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
-export const IGNORED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage"]);
+export const IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".next",
+  ".nuxt",
+  ".output",
+  ".svelte-kit",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "storybook-static",
+]);
 
 export const CANONICAL_GITHUB_URL = "https://github.com/millionco/react-doctor";
 
@@ -69,21 +85,33 @@ export const KNIP_TOTAL_ATTEMPTS = 6;
 
 export const PROXY_OUTPUT_MAX_BYTES = 50 * 1024 * 1024;
 
-export const CDP_CONNECT_TIMEOUT_MS = 10_000;
-
-export const SNAPSHOT_TIMEOUT_DEFAULT_MS = 30_000;
-
-export const DEFAULT_VIEWPORT_WIDTH_PX = 1280;
-
-export const DEFAULT_VIEWPORT_HEIGHT_PX = 720;
-
-export const SIGTERM_GRACE_PERIOD_MS = 2_000;
-
-export const SIGTERM_POLL_INTERVAL_MS = 50;
-
-export const SESSION_DIR_NAME = ".react-doctor";
-
-export const SESSION_FILE_NAME = "browser.json";
-
 export const buildNoReactDependencyError = (directory: string): string =>
   `No React dependency found in ${directory}/package.json. Add "react" to dependencies (or peerDependencies) and re-run.`;
+
+// HACK: lookahead cap for JSX opener-span scanning; bounds worst-case
+// work on pathological files. Real openers stay well under this.
+export const JSX_OPENER_SCAN_MAX_LINES = 32;
+
+// HACK: lookback cap for stacked / near-miss disable-next-line scanning.
+// Larger gaps stop being intentional suppressions and become noise.
+export const SUPPRESSION_NEAR_MISS_MAX_LINES = 10;
+
+// `useEffectEvent` requires React 19+. Below the threshold, the rule
+// that suggests it (`prefer-use-effect-event`) stays silent.
+export const USE_EFFECT_EVENT_MIN_MAJOR = 19;
+
+// In the default human output, show several category sections like an
+// audit report, but cap each section so one noisy category does not
+// bury the rest of the scan.
+export const MAX_CATEGORY_GROUPS_SHOWN_NON_VERBOSE = 5;
+
+export const MAX_RULE_GROUPS_PER_CATEGORY_NON_VERBOSE = 3;
+
+// Minimum width of the rule-name column in the diagnostics list. Pads
+// shorter rule names so the right-aligned `N sites` count stays in a
+// consistent column even when one rule has a much longer identifier.
+export const RULE_NAME_COLUMN_WIDTH_CHARS = 36;
+
+export const OUTPUT_DETAIL_WRAP_WIDTH_CHARS = 88;
+
+export const SPINNER_INDENT_CHARS = 0;

@@ -1,0 +1,39 @@
+import { createComponentPropStackTracker } from "../../utils/create-component-prop-stack-tracker.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { getRootIdentifierName } from "../../utils/get-root-identifier-name.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const noDerivedUseState = defineRule<Rule>({
+  create: (context: RuleContext) => {
+    const propStackTracker = createComponentPropStackTracker();
+
+    return {
+      ...propStackTracker.visitors,
+      CallExpression(node: EsTreeNode) {
+        if (!isHookCall(node, "useState") || !node.arguments?.length) return;
+        const initializer = node.arguments[0];
+
+        if (initializer.type === "Identifier" && propStackTracker.isPropName(initializer.name)) {
+          context.report({
+            node,
+            message: `useState initialized from prop "${initializer.name}" — if this value should stay in sync with the prop, derive it during render instead`,
+          });
+          return;
+        }
+
+        if (initializer.type === "MemberExpression" && !initializer.computed) {
+          const rootIdentifierName = getRootIdentifierName(initializer);
+          if (rootIdentifierName && propStackTracker.isPropName(rootIdentifierName)) {
+            context.report({
+              node,
+              message: `useState initialized from prop "${rootIdentifierName}" — if this value should stay in sync with the prop, derive it during render instead`,
+            });
+          }
+        }
+      },
+    };
+  },
+});

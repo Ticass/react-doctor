@@ -6,4 +6,6 @@ export const highlighter = {
   info: pc.cyan,
   success: pc.green,
   dim: pc.dim,
+  gray: pc.gray,
+  bold: pc.bold,
 };
