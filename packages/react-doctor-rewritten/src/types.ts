@@ -22,19 +22,19 @@ export interface ProjectInfo {
   sourceFileCount: number;
 }
 
-export interface OxlintSpan {
+interface OxlintSpan {
   offset: number;
   length: number;
   line: number;
   column: number;
 }
 
-export interface OxlintLabel {
+interface OxlintLabel {
   label: string;
   span: OxlintSpan;
 }
 
-export interface OxlintDiagnostic {
+interface OxlintDiagnostic {
   message: string;
   code: string;
   severity: "warning" | "error";
@@ -62,7 +62,6 @@ export interface Diagnostic {
   line: number;
   column: number;
   category: string;
-  weight?: number;
 }
 
 export interface PackageJson {
@@ -70,7 +69,9 @@ export interface PackageJson {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
-  workspaces?: string[] | { packages: string[] };
+  workspaces?: string[] | { packages?: string[]; catalog?: Record<string, string> };
+  catalog?: unknown;
+  catalogs?: unknown;
 }
 
 export interface DependencyInfo {
@@ -78,7 +79,7 @@ export interface DependencyInfo {
   framework: Framework;
 }
 
-export interface KnipIssue {
+interface KnipIssue {
   filePath: string;
   symbol: string;
   type: string;
@@ -95,17 +96,31 @@ export interface ScoreResult {
   label: string;
 }
 
-export interface ScanResult {
-  diagnostics: Diagnostic[];
-  scoreResult: ScoreResult | null;
-  skippedChecks: string[];
+export interface DiagnoseOptions {
+  lint?: boolean;
+  deadCode?: boolean;
+  verbose?: boolean;
+  includePaths?: string[];
+  /**
+   * Per-call override for `ReactDoctorConfig.respectInlineDisables`.
+   * See that field's docs for the full contract.
+   */
+  respectInlineDisables?: boolean;
 }
 
-export interface EstimatedScoreResult {
-  currentScore: number;
-  currentLabel: string;
-  estimatedScore: number;
-  estimatedLabel: string;
+export interface DiagnoseResult {
+  diagnostics: Diagnostic[];
+  score: ScoreResult | null;
+  project: ProjectInfo;
+  elapsedMilliseconds: number;
+}
+
+export interface ScanResult {
+  diagnostics: Diagnostic[];
+  score: ScoreResult | null;
+  skippedChecks: string[];
+  project: ProjectInfo;
+  elapsedMilliseconds: number;
 }
 
 export type NoBrandingThread = "full" | "pr";
@@ -116,9 +131,20 @@ export interface ScanOptions {
   verbose?: boolean;
   scoreOnly?: boolean;
   offline?: boolean;
-  noBranding?: boolean;
-  noBrandingThread?: NoBrandingThread;
+  silent?: boolean;
   includePaths?: string[];
+  configOverride?: ReactDoctorConfig | null;
+  respectInlineDisables?: boolean;
+  /**
+   * When true, suppress all ASCII branding/spinner output and emit a
+   * GitHub-flavored HTML report (suitable for posting as a PR comment).
+   */
+  noBranding?: boolean;
+  /**
+   * Which thread marker / heading to embed in the no-branding HTML report.
+   * `"full"` for whole-repo scans, `"pr"` for PR-scoped scans.
+   */
+  noBrandingThread?: NoBrandingThread;
 }
 
 export interface DiffInfo {
@@ -152,7 +178,7 @@ export interface PromptMultiselectContext {
 
 export interface KnipResults {
   issues: {
-    files: Set<string>;
+    files: KnipIssueRecords | Set<string> | string[];
     dependencies: KnipIssueRecords;
     devDependencies: KnipIssueRecords;
     unlisted: KnipIssueRecords;
@@ -168,7 +194,7 @@ export interface CleanedDiagnostic {
   help: string;
 }
 
-export interface ReactDoctorIgnoreConfig {
+interface ReactDoctorIgnoreConfig {
   rules?: string[];
   files?: string[];
 }
@@ -180,4 +206,82 @@ export interface ReactDoctorConfig {
   verbose?: boolean;
   diff?: boolean | string;
   failOn?: FailOnLevel;
+  customRulesOnly?: boolean;
+  share?: boolean;
+  textComponents?: string[];
+  /**
+   * Whether to respect inline `// eslint-disable*` / `// oxlint-disable*`
+   * comments in source files. Default: `true`.
+   *
+   * File-level ignores (`.gitignore`, `.eslintignore`, `.oxlintignore`,
+   * `.prettierignore`, `.gitattributes` `linguist-vendored` /
+   * `linguist-generated`) are ALWAYS honored regardless of this option
+   * — they typically point at vendored or generated code that
+   * genuinely shouldn't be linted at all.
+   *
+   * Set to `false` for "audit mode": every inline suppression is
+   * neutralized so react-doctor reports every diagnostic regardless
+   * of historical hide-comments.
+   */
+  respectInlineDisables?: boolean;
+  /**
+   * Fork-only: emit a GitHub-flavored HTML report instead of the ASCII
+   * terminal output. Equivalent to passing `--hide-branding` on the CLI.
+   */
+  noBranding?: boolean;
+  /**
+   * Fork-only: thread marker for the no-branding HTML report.
+   */
+  noBrandingThread?: NoBrandingThread;
+}
+
+export type JsonReportMode = "full" | "diff" | "staged";
+
+export interface JsonReportDiffInfo {
+  baseBranch: string;
+  currentBranch: string;
+  changedFileCount: number;
+  isCurrentChanges: boolean;
+}
+
+export interface JsonReportProjectEntry {
+  directory: string;
+  project: ProjectInfo;
+  diagnostics: Diagnostic[];
+  score: ScoreResult | null;
+  skippedChecks: string[];
+  elapsedMilliseconds: number;
+}
+
+export interface JsonReportSummary {
+  errorCount: number;
+  warningCount: number;
+  affectedFileCount: number;
+  totalDiagnosticCount: number;
+  score: number | null;
+  scoreLabel: string | null;
+}
+
+export interface JsonReportError {
+  message: string;
+  name: string;
+  chain: string[];
+}
+
+export interface JsonReport {
+  schemaVersion: 1;
+  version: string;
+  ok: boolean;
+  directory: string;
+  mode: JsonReportMode;
+  diff: JsonReportDiffInfo | null;
+  projects: JsonReportProjectEntry[];
+  /**
+   * Flattened across `projects[].diagnostics` for convenience. Equivalent to
+   * `projects.flatMap((project) => project.diagnostics)`.
+   */
+  diagnostics: Diagnostic[];
+  summary: JsonReportSummary;
+  elapsedMilliseconds: number;
+  error: JsonReportError | null;
 }

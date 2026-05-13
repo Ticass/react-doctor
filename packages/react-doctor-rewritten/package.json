@@ -1,13 +1,21 @@
 {
   "name": "react-doctor-rewritten",
-  "version": "0.2.0",
-  "description": "Diagnose and fix performance issues in your React app",
+  "version": "0.2.1",
+  "description": "Diagnose and fix React codebases for security, performance, correctness, accessibility, bundle-size, and architecture issues (fork of millionco/react-doctor with --hide-branding HTML report for CI).",
   "keywords": [
+    "accessibility",
     "diagnostics",
+    "knip",
     "linter",
     "nextjs",
+    "oxlint",
     "performance",
-    "react"
+    "react",
+    "react-compiler",
+    "react-native",
+    "security",
+    "tanstack",
+    "typescript"
   ],
   "homepage": "https://github.com/Ticass/react-doctor-rewritten#readme",
   "bugs": {
@@ -21,12 +29,16 @@
     "directory": "packages/react-doctor-rewritten"
   },
   "bin": {
-    "react-doctor-rewritten": "./dist/cli.js"
+    "react-doctor-rewritten": "./bin/react-doctor.js"
   },
   "files": [
-    "dist"
+    "bin/**",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/skills/**"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/cli.d.ts",
@@ -43,15 +55,15 @@
   },
   "scripts": {
     "dev": "tsdown --watch",
-    "build": "node -e \"try{require('fs').rmSync('dist',{recursive:true,force:true})}catch(e){}\" && tsdown",
+    "build": "node -e \"try{require('node:fs').rmSync('dist',{recursive:true,force:true})}catch(e){}\" && tsdown",
     "typecheck": "tsc --noEmit",
     "test": "pnpm build && vitest run"
   },
   "dependencies": {
+    "agent-install": "0.0.5",
     "commander": "^14.0.3",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "knip": "^5.83.1",
-    "ora": "^9.3.0",
+    "knip": "^6.10.0",
+    "ora": "^9.4.0",
     "oxlint": "^1.62.0",
     "picocolors": "^1.1.1",
     "prompts": "^2.4.2",
@@ -60,5 +72,16 @@
   "devDependencies": {
     "@types/prompts": "^2.4.9",
     "tsdown": "^0.20.3"
+  },
+  "peerDependencies": {
+    "eslint-plugin-react-hooks": "^6 || ^7"
+  },
+  "peerDependenciesMeta": {
+    "eslint-plugin-react-hooks": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

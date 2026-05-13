@@ -1,25 +1,30 @@
-import { JSX_FILE_PATTERN } from "../constants.js";
 import type { Diagnostic, ReactDoctorConfig } from "../types.js";
 import { checkReducedMotion } from "./check-reduced-motion.js";
-import { filterIgnoredDiagnostics, filterInlineSuppressions } from "./filter-diagnostics.js";
+import { createNodeReadFileLinesSync } from "./read-file-lines-node.js";
+import { mergeAndFilterDiagnostics } from "./merge-and-filter-diagnostics.js";
 
-export const computeJsxIncludePaths = (includePaths: string[]): string[] | undefined =>
-  includePaths.length > 0
-    ? includePaths.filter((filePath) => JSX_FILE_PATTERN.test(filePath))
-    : undefined;
+interface CombineDiagnosticsInput {
+  lintDiagnostics: Diagnostic[];
+  deadCodeDiagnostics: Diagnostic[];
+  directory: string;
+  isDiffMode: boolean;
+  userConfig: ReactDoctorConfig | null;
+  readFileLinesSync?: (filePath: string) => string[] | null;
+  includeEnvironmentChecks?: boolean;
+}
 
-export const combineDiagnostics = (
-  lintDiagnostics: Diagnostic[],
-  deadCodeDiagnostics: Diagnostic[],
-  directory: string,
-  isDiffMode: boolean,
-  userConfig: ReactDoctorConfig | null,
-): Diagnostic[] => {
-  const merged = [
-    ...lintDiagnostics,
-    ...deadCodeDiagnostics,
-    ...(isDiffMode ? [] : checkReducedMotion(directory)),
-  ];
-  const filtered = userConfig ? filterIgnoredDiagnostics(merged, userConfig) : merged;
-  return filterInlineSuppressions(filtered, directory);
+export const combineDiagnostics = (input: CombineDiagnosticsInput): Diagnostic[] => {
+  const {
+    lintDiagnostics,
+    deadCodeDiagnostics,
+    directory,
+    isDiffMode,
+    userConfig,
+    readFileLinesSync = createNodeReadFileLinesSync(directory),
+    includeEnvironmentChecks = true,
+  } = input;
+  const extraDiagnostics =
+    isDiffMode || !includeEnvironmentChecks ? [] : checkReducedMotion(directory);
+  const merged = [...lintDiagnostics, ...deadCodeDiagnostics, ...extraDiagnostics];
+  return mergeAndFilterDiagnostics(merged, directory, userConfig, readFileLinesSync);
 };

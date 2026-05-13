@@ -18,7 +18,7 @@ export const createFramedLine = (
   renderedText,
 });
 
-export const renderFramedBoxString = (framedLines: FramedLine[]): string => {
+const renderFramedBoxString = (framedLines: FramedLine[]): string => {
   if (framedLines.length === 0) return "";
 
   const borderColorizer = highlighter.dim;

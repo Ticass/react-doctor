@@ -177,7 +177,7 @@ export const SECRET_FALSE_POSITIVE_SUFFIXES = new Set([
 
 export const LOADING_STATE_PATTERN = /^(?:isLoading|isPending)$/;
 
-export const TANSTACK_ROUTE_FILE_PATTERN = /\/routes\//;
+export const TANSTACK_ROUTE_FILE_PATTERN = /[\\/]routes[\\/]/;
 export const TANSTACK_ROOT_ROUTE_FILE_PATTERN = /__root\.(tsx?|jsx?)$/;
 
 export const TANSTACK_ROUTE_PROPERTY_ORDER = [
@@ -275,7 +275,7 @@ export const INTERNAL_PAGE_PATH_PATTERN =
 export const TEST_FILE_PATTERN = /\.(?:test|spec|stories)\.[tj]sx?$/;
 export const OG_ROUTE_PATTERN = /[\\/]og\b/i;
 
-export const PAGES_DIRECTORY_PATTERN = /\/pages\//;
+export const PAGES_DIRECTORY_PATTERN = /[\\/]pages[\\/]/;
 
 export const NEXTJS_NAVIGATION_FUNCTIONS = new Set([
   "redirect",
@@ -312,8 +312,11 @@ export const MUTATION_METHOD_NAMES = new Set([
   "append",
 ]);
 
-export const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
-
+// In-place Array.prototype mutators. These are the canonical "mutating"
+// methods used to flag direct mutation of useState values (e.g. an
+// `items` from `useState([])` that gets `.push()`ed). The immutable
+// counterparts (toSorted/toReversed/toSpliced/with) are intentionally
+// excluded; those return a new array.
 export const MUTATING_ARRAY_METHODS = new Set([
   "push",
   "pop",
@@ -326,7 +329,7 @@ export const MUTATING_ARRAY_METHODS = new Set([
   "copyWithin",
 ]);
 
-export const CONTROLLED_INPUT_ELEMENTS = new Set(["input", "textarea", "select"]);
+export const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 export const MUTATING_ROUTE_SEGMENTS = new Set([
   "logout",
@@ -444,3 +447,72 @@ export const TINY_TEXT_THRESHOLD_PX = 12;
 export const WIDE_TRACKING_THRESHOLD_EM = 0.05;
 
 export const LONG_TRANSITION_DURATION_THRESHOLD_MS = 1000;
+
+export const HEAVY_HEADING_FONT_WEIGHT_MIN = 700;
+
+export const HEADING_TAG_NAMES = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+
+export const HEAVY_HEADING_TAILWIND_WEIGHTS = new Set([
+  "font-bold",
+  "font-extrabold",
+  "font-black",
+]);
+
+export const TAILWIND_DEFAULT_PALETTE_NAMES = ["indigo", "gray", "slate"];
+
+export const TAILWIND_PALETTE_UTILITY_PREFIXES = [
+  "text",
+  "bg",
+  "border",
+  "ring",
+  "fill",
+  "stroke",
+  "from",
+  "to",
+  "via",
+  "decoration",
+  "divide",
+  "outline",
+  "placeholder",
+  "caret",
+  "accent",
+  "shadow",
+];
+
+export const VAGUE_BUTTON_LABELS = new Set([
+  "continue",
+  "submit",
+  "ok",
+  "okay",
+  "click here",
+  "here",
+  "yes",
+  "no",
+  "go",
+  "done",
+]);
+
+export const ELLIPSIS_EXCLUDED_TAG_NAMES = new Set(["code", "pre", "kbd", "samp", "var", "tt"]);
+
+export const EM_DASH_CHARACTER = "\u2014";
+
+// HACK: trailing boundary uses a LOOKAHEAD `(?=...)` so the whitespace
+// between Tailwind tokens isn't consumed. With a consuming `(?:$|\s|:)`
+// trailing group, `matchAll` over `"px-4 px-6"` would catch `px-4` plus
+// the trailing space, then fail to find a leading `\s` boundary for
+// `px-6` because we just ate it — silently skipping the second token.
+export const PADDING_HORIZONTAL_AXIS_PATTERN =
+  /(?:^|\s)(-?)px-(\d+(?:\.\d+)?|\[[^\]]+\])(?=$|[\s:])/g;
+
+export const PADDING_VERTICAL_AXIS_PATTERN =
+  /(?:^|\s)(-?)py-(\d+(?:\.\d+)?|\[[^\]]+\])(?=$|[\s:])/g;
+
+export const SIZE_WIDTH_AXIS_PATTERN = /(?:^|\s)(-?)w-(\d+(?:\.\d+)?|\[[^\]]+\])(?=$|[\s:])/g;
+
+export const SIZE_HEIGHT_AXIS_PATTERN = /(?:^|\s)(-?)h-(\d+(?:\.\d+)?|\[[^\]]+\])(?=$|[\s:])/g;
+
+export const FLEX_OR_GRID_DISPLAY_TOKENS = new Set(["flex", "inline-flex", "grid", "inline-grid"]);
+
+export const SPACE_AXIS_PATTERN = /(?:^|\s)(?:-)?space-(x|y)-(\d+(?:\.\d+)?|\[[^\]]+\])(?=$|[\s:])/;
+
+export const TRAILING_THREE_PERIOD_ELLIPSIS_PATTERN = /[A-Za-z]\.\.\./;

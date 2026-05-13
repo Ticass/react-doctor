@@ -9,7 +9,6 @@ export const selectProjects = async (
   rootDirectory: string,
   projectFlag: string | undefined,
   skipPrompts: boolean,
-  shouldReportSelection: boolean = true,
 ): Promise<string[]> => {
   let packages = listWorkspacePackages(rootDirectory);
   if (packages.length === 0) {
@@ -18,20 +17,16 @@ export const selectProjects = async (
 
   if (packages.length === 0) return [rootDirectory];
   if (packages.length === 1) {
-    if (shouldReportSelection) {
-      logger.log(
-        `${highlighter.success("OK")} Select projects to scan ${highlighter.dim(">")} ${packages[0].name}`,
-      );
-    }
+    logger.log(
+      `${highlighter.success("✔")} Select projects to scan ${highlighter.dim("›")} ${packages[0].name}`,
+    );
     return [packages[0].directory];
   }
 
   if (projectFlag) return resolveProjectFlag(projectFlag, packages);
 
   if (skipPrompts) {
-    if (shouldReportSelection) {
-      printDiscoveredProjects(packages);
-    }
+    printDiscoveredProjects(packages);
     return packages.map((workspacePackage) => workspacePackage.directory);
   }
 
@@ -67,7 +62,7 @@ const resolveProjectFlag = (
 
 const printDiscoveredProjects = (packages: WorkspacePackage[]): void => {
   logger.log(
-    `${highlighter.success("OK")} Select projects to scan ${highlighter.dim(">")} ${packages.map((workspacePackage) => workspacePackage.name).join(", ")}`,
+    `${highlighter.success("✔")} Select projects to scan ${highlighter.dim("›")} ${packages.map((workspacePackage) => workspacePackage.name).join(", ")}`,
   );
 };
 

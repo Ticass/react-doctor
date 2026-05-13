@@ -20,11 +20,7 @@ export const SUMMARY_BOX_OUTER_INDENT_CHARS = 2;
 
 export const SCORE_API_URL = "https://www.react.doctor/api/score";
 
-export const ESTIMATE_SCORE_API_URL = "https://www.react.doctor/api/estimate-score";
-
 export const SHARE_BASE_URL = "https://www.react.doctor/share";
-
-export const OPEN_BASE_URL = "https://www.react.doctor/open";
 
 export const FETCH_TIMEOUT_MS = 10_000;
 
@@ -34,8 +30,11 @@ export const GIT_LS_FILES_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 // Use a conservative threshold to leave room for the executable path and quoting overhead.
 export const SPAWN_ARGS_MAX_LENGTH_CHARS = 24_000;
 
-export const OFFLINE_MESSAGE =
-  "You are offline, could not calculate score. Reconnect to calculate.";
+// HACK: oxlint can SIGABRT on very large file sets due to memory pressure.
+// Cap each batch to avoid OOM crashes on projects with 100+ source files.
+export const OXLINT_MAX_FILES_PER_BATCH = 500;
+
+export const OFFLINE_MESSAGE = "Score calculated locally (offline mode).";
 
 export const DEFAULT_BRANCH_CANDIDATES = ["main", "master"];
 
@@ -43,18 +42,48 @@ export const ERROR_RULE_PENALTY = 1.5;
 
 export const WARNING_RULE_PENALTY = 0.75;
 
-export const ERROR_ESTIMATED_FIX_RATE = 0.85;
-
-export const WARNING_ESTIMATED_FIX_RATE = 0.8;
-
-export const MAX_KNIP_RETRIES = 5;
+export const KNIP_CONFIG_LOCATIONS = [
+  "knip.json",
+  "knip.jsonc",
+  ".knip.json",
+  ".knip.jsonc",
+  "knip.ts",
+  "knip.js",
+  "knip.config.ts",
+  "knip.config.js",
+];
 
 export const OXLINT_NODE_REQUIREMENT = "^20.19.0 || >=22.12.0";
 
 export const OXLINT_RECOMMENDED_NODE_MAJOR = 24;
 
-export const AMI_WEBSITE_URL = "https://ami.dev";
+export const GIT_SHOW_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
-export const AMI_INSTALL_URL = `${AMI_WEBSITE_URL}/install.sh`;
+export const IGNORED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage"]);
 
-export const AMI_RELEASES_URL = "https://github.com/millionco/ami-releases/releases";
+export const CANONICAL_GITHUB_URL = "https://github.com/millionco/react-doctor";
+
+export const SKILL_NAME = "react-doctor";
+
+export const KNIP_TOTAL_ATTEMPTS = 6;
+
+export const PROXY_OUTPUT_MAX_BYTES = 50 * 1024 * 1024;
+
+export const CDP_CONNECT_TIMEOUT_MS = 10_000;
+
+export const SNAPSHOT_TIMEOUT_DEFAULT_MS = 30_000;
+
+export const DEFAULT_VIEWPORT_WIDTH_PX = 1280;
+
+export const DEFAULT_VIEWPORT_HEIGHT_PX = 720;
+
+export const SIGTERM_GRACE_PERIOD_MS = 2_000;
+
+export const SIGTERM_POLL_INTERVAL_MS = 50;
+
+export const SESSION_DIR_NAME = ".react-doctor";
+
+export const SESSION_FILE_NAME = "browser.json";
+
+export const buildNoReactDependencyError = (directory: string): string =>
+  `No React dependency found in ${directory}/package.json. Add "react" to dependencies (or peerDependencies) and re-run.`;

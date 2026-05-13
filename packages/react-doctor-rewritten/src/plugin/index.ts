@@ -100,6 +100,16 @@ import {
   rerenderTransitionsScroll,
 } from "./rules/performance.js";
 import {
+  noBoldHeading,
+  noDefaultTailwindPalette,
+  noEmDashInJsxText,
+  noRedundantPaddingAxes,
+  noRedundantSizeAxes,
+  noSpaceOnFlexChildren,
+  noThreePeriodEllipsis,
+  noVagueButtonLabel,
+} from "./rules/react-ui.js";
+import {
   rnAnimateLayoutProperty,
   rnAnimationReactionAsDerived,
   rnBottomSheetPreferNative,
@@ -358,6 +368,15 @@ const plugin: RulePlugin = {
     "no-disabled-zoom": noDisabledZoom,
     "no-outline-none": noOutlineNone,
     "no-long-transition-duration": noLongTransitionDuration,
+
+    "design-no-bold-heading": noBoldHeading,
+    "design-no-redundant-padding-axes": noRedundantPaddingAxes,
+    "design-no-redundant-size-axes": noRedundantSizeAxes,
+    "design-no-space-on-flex-children": noSpaceOnFlexChildren,
+    "design-no-em-dash-in-jsx-text": noEmDashInJsxText,
+    "design-no-three-period-ellipsis": noThreePeriodEllipsis,
+    "design-no-default-tailwind-palette": noDefaultTailwindPalette,
+    "design-no-vague-button-label": noVagueButtonLabel,
   },
 };
 

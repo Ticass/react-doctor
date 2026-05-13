@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { GIT_LS_FILES_MAX_BUFFER_BYTES, SOURCE_FILE_PATTERN } from "../constants.js";
+import {
+  GIT_LS_FILES_MAX_BUFFER_BYTES,
+  IGNORED_DIRECTORIES,
+  SOURCE_FILE_PATTERN,
+} from "../constants.js";
 import type {
   DependencyInfo,
   Framework,
@@ -18,6 +22,12 @@ const REACT_COMPILER_PACKAGES = new Set([
   "babel-plugin-react-compiler",
   "react-compiler-runtime",
   "eslint-plugin-react-compiler",
+]);
+
+const TANSTACK_QUERY_PACKAGES = new Set([
+  "@tanstack/react-query",
+  "@tanstack/query-core",
+  "react-query",
 ]);
 
 const NEXT_CONFIG_FILENAMES = [
@@ -40,18 +50,18 @@ const VITE_CONFIG_FILENAMES = [
   "vite.config.js",
   "vite.config.ts",
   "vite.config.mjs",
+  "vite.config.mts",
   "vite.config.cjs",
+  "vite.config.cts",
+  "vitest.config.ts",
+  "vitest.config.js",
 ];
 
 const EXPO_APP_CONFIG_FILENAMES = ["app.json", "app.config.js", "app.config.ts"];
 
-const REACT_COMPILER_CONFIG_PATTERN = /react-compiler|reactCompiler/;
-
-const TANSTACK_QUERY_PACKAGES = new Set([
-  "@tanstack/react-query",
-  "@tanstack/query-core",
-  "react-query",
-]);
+const REACT_COMPILER_PACKAGE_REFERENCE_PATTERN =
+  /babel-plugin-react-compiler|react-compiler-runtime|eslint-plugin-react-compiler|["']react-compiler["']/;
+const REACT_COMPILER_ENABLED_FLAG_PATTERN = /["']?reactCompiler["']?\s*:\s*(?:true\b|\{)/;
 
 const FRAMEWORK_PACKAGES: Record<string, Framework> = {
   next: "nextjs",
@@ -66,20 +76,18 @@ const FRAMEWORK_PACKAGES: Record<string, Framework> = {
 
 const FRAMEWORK_DISPLAY_NAMES: Record<Framework, string> = {
   nextjs: "Next.js",
+  "tanstack-start": "TanStack Start",
   vite: "Vite",
   cra: "Create React App",
   remix: "Remix",
   gatsby: "Gatsby",
   expo: "Expo",
   "react-native": "React Native",
-  "tanstack-start": "TanStack Start",
   unknown: "React",
 };
 
 export const formatFrameworkName = (framework: Framework): string =>
   FRAMEWORK_DISPLAY_NAMES[framework];
-
-const IGNORED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage"]);
 
 const countSourceFilesViaFilesystem = (rootDirectory: string): number => {
   let count = 0;
@@ -106,18 +114,26 @@ const countSourceFilesViaFilesystem = (rootDirectory: string): number => {
 };
 
 const countSourceFilesViaGit = (rootDirectory: string): number | null => {
-  const result = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
-    cwd: rootDirectory,
-    encoding: "utf-8",
-    maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
-  });
+  // HACK: do NOT add --recurse-submodules — it's incompatible with
+  // --others / --exclude-standard and git rejects the combination, which
+  // would silently force every scan to fall back to the much slower
+  // filesystem walk in countSourceFilesViaFilesystem.
+  const result = spawnSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    {
+      cwd: rootDirectory,
+      encoding: "utf-8",
+      maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
+    },
+  );
 
   if (result.error || result.status !== 0) {
     return null;
   }
 
   return result.stdout
-    .split("\n")
+    .split("\0")
     .filter((filePath) => filePath.length > 0 && SOURCE_FILE_PATTERN.test(filePath)).length;
 };
 
@@ -141,6 +157,12 @@ const detectFramework = (dependencies: Record<string, string>): Framework => {
 
 const isCatalogReference = (version: string): boolean => version.startsWith("catalog:");
 
+const extractCatalogName = (version: string): string | null => {
+  if (!isCatalogReference(version)) return null;
+  const name = version.slice("catalog:".length).trim();
+  return name.length > 0 ? name : null;
+};
+
 const resolveVersionFromCatalog = (
   catalog: Record<string, unknown>,
   packageName: string,
@@ -150,21 +172,141 @@ const resolveVersionFromCatalog = (
   return null;
 };
 
-const resolveCatalogVersion = (packageJson: PackageJson, packageName: string): string | null => {
-  const raw = packageJson as Record<string, unknown>;
+interface CatalogCollection {
+  defaultCatalog: Record<string, string>;
+  namedCatalogs: Record<string, Record<string, string>>;
+}
 
-  if (isPlainObject(raw.catalog)) {
-    const version = resolveVersionFromCatalog(raw.catalog, packageName);
+const parsePnpmWorkspaceCatalogs = (rootDirectory: string): CatalogCollection => {
+  const workspacePath = path.join(rootDirectory, "pnpm-workspace.yaml");
+  if (!isFile(workspacePath)) return { defaultCatalog: {}, namedCatalogs: {} };
+
+  const content = fs.readFileSync(workspacePath, "utf-8");
+  const defaultCatalog: Record<string, string> = {};
+  const namedCatalogs: Record<string, Record<string, string>> = {};
+
+  let currentSection: "none" | "catalog" | "catalogs" | "named-catalog" = "none";
+  let currentCatalogName = "";
+
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
+
+    const indentLevel = line.search(/\S/);
+
+    if (indentLevel === 0 && trimmed === "catalog:") {
+      currentSection = "catalog";
+      continue;
+    }
+    if (indentLevel === 0 && trimmed === "catalogs:") {
+      currentSection = "catalogs";
+      continue;
+    }
+    if (indentLevel === 0) {
+      currentSection = "none";
+      continue;
+    }
+
+    if (currentSection === "catalog" && indentLevel > 0) {
+      const colonIndex = trimmed.indexOf(":");
+      if (colonIndex > 0) {
+        const key = trimmed.slice(0, colonIndex).trim().replace(/["']/g, "");
+        const value = trimmed
+          .slice(colonIndex + 1)
+          .trim()
+          .replace(/["']/g, "");
+        if (key && value) defaultCatalog[key] = value;
+      }
+      continue;
+    }
+
+    if (currentSection === "catalogs" && indentLevel > 0) {
+      if (trimmed.endsWith(":") && !trimmed.includes(" ")) {
+        currentCatalogName = trimmed.slice(0, -1).replace(/["']/g, "");
+        currentSection = "named-catalog";
+        namedCatalogs[currentCatalogName] = {};
+        continue;
+      }
+    }
+
+    if (currentSection === "named-catalog" && indentLevel > 0) {
+      if (indentLevel <= 2 && trimmed.endsWith(":") && !trimmed.includes(" ")) {
+        currentCatalogName = trimmed.slice(0, -1).replace(/["']/g, "");
+        namedCatalogs[currentCatalogName] = {};
+        continue;
+      }
+      const colonIndex = trimmed.indexOf(":");
+      if (colonIndex > 0 && currentCatalogName) {
+        const key = trimmed.slice(0, colonIndex).trim().replace(/["']/g, "");
+        const value = trimmed
+          .slice(colonIndex + 1)
+          .trim()
+          .replace(/["']/g, "");
+        if (key && value) namedCatalogs[currentCatalogName][key] = value;
+      }
+    }
+  }
+
+  return { defaultCatalog, namedCatalogs };
+};
+
+const resolveCatalogVersionFromCollection = (
+  catalogs: CatalogCollection,
+  packageName: string,
+  catalogReference?: string | null,
+): string | null => {
+  if (catalogReference) {
+    const namedCatalog = catalogs.namedCatalogs[catalogReference];
+    if (namedCatalog?.[packageName]) return namedCatalog[packageName];
+  }
+
+  if (catalogs.defaultCatalog[packageName]) return catalogs.defaultCatalog[packageName];
+
+  for (const namedCatalog of Object.values(catalogs.namedCatalogs)) {
+    if (namedCatalog[packageName]) return namedCatalog[packageName];
+  }
+
+  return null;
+};
+
+const resolveCatalogVersion = (
+  packageJson: PackageJson,
+  packageName: string,
+  rootDirectory?: string,
+): string | null => {
+  const allDependencies = collectAllDependencies(packageJson);
+  const rawVersion = allDependencies[packageName];
+  const catalogName = rawVersion ? extractCatalogName(rawVersion) : null;
+
+  if (isPlainObject(packageJson.catalog)) {
+    const version = resolveVersionFromCatalog(packageJson.catalog, packageName);
     if (version) return version;
   }
 
-  if (isPlainObject(raw.catalogs)) {
-    for (const catalogEntries of Object.values(raw.catalogs)) {
+  if (isPlainObject(packageJson.catalogs)) {
+    const namedCatalog = catalogName ? packageJson.catalogs[catalogName] : undefined;
+    if (namedCatalog && isPlainObject(namedCatalog)) {
+      const version = resolveVersionFromCatalog(namedCatalog, packageName);
+      if (version) return version;
+    }
+    for (const catalogEntries of Object.values(packageJson.catalogs)) {
       if (isPlainObject(catalogEntries)) {
         const version = resolveVersionFromCatalog(catalogEntries, packageName);
         if (version) return version;
       }
     }
+  }
+
+  const workspaces = packageJson.workspaces;
+  if (workspaces && !Array.isArray(workspaces) && isPlainObject(workspaces.catalog)) {
+    const version = resolveVersionFromCatalog(workspaces.catalog, packageName);
+    if (version) return version;
+  }
+
+  if (rootDirectory) {
+    const pnpmCatalogs = parsePnpmWorkspaceCatalogs(rootDirectory);
+    const pnpmVersion = resolveCatalogVersionFromCollection(pnpmCatalogs, packageName, catalogName);
+    if (pnpmVersion) return pnpmVersion;
   }
 
   return null;
@@ -204,6 +346,29 @@ const parsePnpmWorkspacePatterns = (rootDirectory: string): string[] => {
   return patterns;
 };
 
+const NX_PROJECT_DISCOVERY_DIRS = ["apps", "libs", "packages"];
+
+const getNxWorkspaceDirectories = (rootDirectory: string): string[] => {
+  if (!isFile(path.join(rootDirectory, "nx.json"))) return [];
+
+  const collected: string[] = [];
+  for (const candidate of NX_PROJECT_DISCOVERY_DIRS) {
+    const candidatePath = path.join(rootDirectory, candidate);
+    if (!fs.existsSync(candidatePath) || !fs.statSync(candidatePath).isDirectory()) continue;
+    for (const entry of fs.readdirSync(candidatePath, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const projectDirectory = path.join(candidatePath, entry.name);
+      if (
+        isFile(path.join(projectDirectory, "project.json")) ||
+        isFile(path.join(projectDirectory, "package.json"))
+      ) {
+        collected.push(`${candidate}/${entry.name}`);
+      }
+    }
+  }
+  return collected;
+};
+
 const getWorkspacePatterns = (rootDirectory: string, packageJson: PackageJson): string[] => {
   const pnpmPatterns = parsePnpmWorkspacePatterns(rootDirectory);
   if (pnpmPatterns.length > 0) return pnpmPatterns;
@@ -215,6 +380,9 @@ const getWorkspacePatterns = (rootDirectory: string, packageJson: PackageJson): 
   if (packageJson.workspaces?.packages) {
     return packageJson.workspaces.packages;
   }
+
+  const nxPatterns = getNxWorkspaceDirectories(rootDirectory);
+  if (nxPatterns.length > 0) return nxPatterns;
 
   return [];
 };
@@ -258,7 +426,7 @@ const findDependencyInfoFromMonorepoRoot = (directory: string): DependencyInfo =
 
   const rootPackageJson = readPackageJson(monorepoPackageJsonPath);
   const rootInfo = extractDependencyInfo(rootPackageJson);
-  const catalogVersion = resolveCatalogVersion(rootPackageJson, "react");
+  const catalogVersion = resolveCatalogVersion(rootPackageJson, "react", monorepoRoot);
   const workspaceInfo = findReactInWorkspaces(monorepoRoot, rootPackageJson);
 
   return {
@@ -348,6 +516,11 @@ export const listWorkspacePackages = (rootDirectory: string): WorkspacePackage[]
 
   const packages: WorkspacePackage[] = [];
 
+  if (hasReactDependency(packageJson)) {
+    const rootName = packageJson.name ?? path.basename(rootDirectory);
+    packages.push({ name: rootName, directory: rootDirectory });
+  }
+
   for (const pattern of patterns) {
     const directories = resolveWorkspaceDirectories(rootDirectory, pattern);
     for (const workspaceDirectory of directories) {
@@ -376,10 +549,22 @@ const fileContainsPattern = (filePath: string, pattern: RegExp): boolean => {
   return pattern.test(content);
 };
 
-const hasCompilerInConfigFiles = (directory: string, filenames: string[]): boolean =>
-  filenames.some((filename) =>
-    fileContainsPattern(path.join(directory, filename), REACT_COMPILER_CONFIG_PATTERN),
+const hasCompilerInConfigFile = (filePath: string): boolean => {
+  if (!isFile(filePath)) return false;
+  const content = fs.readFileSync(filePath, "utf-8");
+  return (
+    REACT_COMPILER_ENABLED_FLAG_PATTERN.test(content) ||
+    REACT_COMPILER_PACKAGE_REFERENCE_PATTERN.test(content)
   );
+};
+
+const hasCompilerInConfigFiles = (directory: string, filenames: string[]): boolean =>
+  filenames.some((filename) => hasCompilerInConfigFile(path.join(directory, filename)));
+
+const isProjectBoundary = (directory: string): boolean => {
+  if (fs.existsSync(path.join(directory, ".git"))) return true;
+  return isMonorepoRoot(directory);
+};
 
 const detectReactCompiler = (directory: string, packageJson: PackageJson): boolean => {
   if (hasCompilerPackage(packageJson)) return true;
@@ -389,6 +574,8 @@ const detectReactCompiler = (directory: string, packageJson: PackageJson): boole
   if (hasCompilerInConfigFiles(directory, VITE_CONFIG_FILENAMES)) return true;
   if (hasCompilerInConfigFiles(directory, EXPO_APP_CONFIG_FILENAMES)) return true;
 
+  if (isProjectBoundary(directory)) return false;
+
   let ancestorDirectory = path.dirname(directory);
   while (ancestorDirectory !== path.dirname(ancestorDirectory)) {
     const ancestorPackagePath = path.join(ancestorDirectory, "package.json");
@@ -396,13 +583,26 @@ const detectReactCompiler = (directory: string, packageJson: PackageJson): boole
       const ancestorPackageJson = readPackageJson(ancestorPackagePath);
       if (hasCompilerPackage(ancestorPackageJson)) return true;
     }
+    if (isProjectBoundary(ancestorDirectory)) return false;
     ancestorDirectory = path.dirname(ancestorDirectory);
   }
 
   return false;
 };
 
+const cachedProjectInfos = new Map<string, ProjectInfo>();
+
+// HACK: paired with clearConfigCache — exposed so programmatic API
+// consumers can re-detect after the project's package.json /
+// tsconfig.json / monorepo manifests change between diagnose() calls.
+export const clearProjectCache = (): void => {
+  cachedProjectInfos.clear();
+};
+
 export const discoverProject = (directory: string): ProjectInfo => {
+  const cached = cachedProjectInfos.get(directory);
+  if (cached !== undefined) return cached;
+
   const packageJsonPath = path.join(directory, "package.json");
   if (!isFile(packageJsonPath)) {
     throw new Error(`No package.json found in ${directory}`);
@@ -412,7 +612,18 @@ export const discoverProject = (directory: string): ProjectInfo => {
   let { reactVersion, framework } = extractDependencyInfo(packageJson);
 
   if (!reactVersion) {
-    reactVersion = resolveCatalogVersion(packageJson, "react");
+    reactVersion = resolveCatalogVersion(packageJson, "react", directory);
+  }
+
+  if (!reactVersion) {
+    const monorepoRoot = findMonorepoRoot(directory);
+    if (monorepoRoot) {
+      const monorepoPackageJsonPath = path.join(monorepoRoot, "package.json");
+      if (isFile(monorepoPackageJsonPath)) {
+        const rootPackageJson = readPackageJson(monorepoPackageJsonPath);
+        reactVersion = resolveCatalogVersion(rootPackageJson, "react", monorepoRoot);
+      }
+    }
   }
 
   if (!reactVersion || framework === "unknown") {
@@ -445,7 +656,7 @@ export const discoverProject = (directory: string): ProjectInfo => {
     TANSTACK_QUERY_PACKAGES.has(packageName),
   );
 
-  return {
+  const projectInfo: ProjectInfo = {
     rootDirectory: directory,
     projectName,
     reactVersion,
@@ -455,4 +666,6 @@ export const discoverProject = (directory: string): ProjectInfo => {
     hasTanStackQuery,
     sourceFileCount,
   };
+  cachedProjectInfos.set(directory, projectInfo);
+  return projectInfo;
 };
