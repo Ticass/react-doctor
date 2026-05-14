@@ -74,6 +74,20 @@ const resolveFailOnLevel = (
   userConfig: ReactDoctorConfig | null,
 ): FailOnLevel => {
   const isCliOverride = programInstance.getOptionValueSource("failOn") === "cli";
+
+  // HACK: in --hide-branding / --hide-branding-pr the report goes to a PR
+  // comment (or an artifact); the comment IS the feedback channel. Failing
+  // the CI step on top of that just paints the job red and obscures real
+  // failures (broken scans, bad config). Default to --fail-on=none in those
+  // modes unless the user explicitly overrode it on the CLI or in config.
+  if (
+    !isCliOverride &&
+    userConfig?.failOn === undefined &&
+    (flags.hideBranding || flags.hideBrandingPr)
+  ) {
+    return "none";
+  }
+
   const sourceValue = isCliOverride ? flags.failOn : (userConfig?.failOn ?? flags.failOn);
 
   if (isValidFailOnLevel(sourceValue)) return sourceValue;
