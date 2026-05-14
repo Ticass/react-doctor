@@ -22,7 +22,7 @@ inputs:
     required: false
   fail-on:
     description: "Exit with error code on diagnostics: error, warning, none"
-    default: "error"
+    default: "none"
   node-version:
     description: "Node.js version to use (must be >=22)"
     default: "22"
