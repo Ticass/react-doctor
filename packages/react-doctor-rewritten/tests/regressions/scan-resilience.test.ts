@@ -19,13 +19,12 @@
  *          string`, killing the whole dead-code step. The sanitizer
  *          strips them before `main()` runs.
  *   #141 — REACT_COMPILER_RULES must not be enabled in the oxlint config
- *          unless the `react-hooks-js` plugin (eslint-plugin-react-hooks,
- *          an optional peer) actually resolved — otherwise oxlint errors
- *          with "Plugin 'react-hooks-js' not found".
+ *          unless the `react-hooks-js` plugin actually resolved —
+ *          otherwise oxlint errors with "Plugin 'react-hooks-js' not found".
  *          Additionally, when the plugin DOES resolve we must filter the
  *          rule list to only the names the loaded version actually
- *          exports — v6 lacks `void-use-memo`, peer is `^6 || ^7`, so a
- *          v6 user with React Compiler would otherwise hit
+ *          exports — older plugin versions can lack newer compiler rules,
+ *          so React Compiler users would otherwise hit
  *          "Rule 'void-use-memo' not found in plugin 'react-hooks-js'".
  */
 
@@ -36,14 +35,20 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { OXLINT_MAX_FILES_PER_BATCH, SPAWN_ARGS_MAX_LENGTH_CHARS } from "../../src/constants.js";
-import { calculateScoreLocally } from "../../src/core/calculate-score-locally.js";
+import { calculateScoreLocally } from "../../src/utils/calculate-score-locally.js";
 import { createOxlintConfig } from "../../src/oxlint-config.js";
 import { batchIncludePaths } from "../../src/utils/batch-include-paths.js";
 import { discoverProject } from "../../src/utils/discover-project.js";
 import { extractFailedPluginName } from "../../src/utils/extract-failed-plugin-name.js";
-import { getStagedSourceFiles, materializeStagedFiles } from "../../src/utils/get-staged-files.js";
+import { getStagedSourceFiles, materializeStagedFiles } from "../../src/cli/get-staged-files.js";
 import { sanitizeKnipConfigPatterns } from "../../src/utils/sanitize-knip-config-patterns.js";
-import { buildDiagnostic, initGitRepo, writeFile, writeJson } from "./_helpers.js";
+import {
+  buildDiagnostic,
+  buildTestProject,
+  initGitRepo,
+  writeFile,
+  writeJson,
+} from "./_helpers.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rd-scan-resilience-"));
 
@@ -160,7 +165,7 @@ describe("issue #89: --offline produces a score calculated locally", () => {
   it("does not require any network access", async () => {
     // Sanity: no `fetch` involvement in the local scoring path.
     const calculateSource = fs.readFileSync(
-      path.resolve(import.meta.dirname, "../../src/core/calculate-score-locally.ts"),
+      path.resolve(import.meta.dirname, "../../src/utils/calculate-score-locally.ts"),
       "utf8",
     );
     expect(calculateSource).not.toContain("fetch(");
@@ -293,7 +298,7 @@ describe("issue #141: oxlint config must not reference unloaded plugins", () => 
     for (const combination of allCombinations) {
       const config = createOxlintConfig({
         pluginPath: "/tmp/react-doctor-plugin.js",
-        ...combination,
+        project: buildTestProject({ rootDirectory: "/tmp/test", ...combination }),
       });
       const referencedPluginNames = collectReferencedPluginNames(config.rules);
       const loadedPluginNames = collectLoadedPluginNames(config);
@@ -305,14 +310,12 @@ describe("issue #141: oxlint config must not reference unloaded plugins", () => 
   });
 
   it("REACT_COMPILER_RULES are gated on react-hooks-js plugin resolution", () => {
-    // When eslint-plugin-react-hooks IS resolvable in the workspace
-    // (true here — it's a devDependency), REACT_COMPILER_RULES should
+    // When eslint-plugin-react-hooks IS resolvable from react-doctor,
+    // REACT_COMPILER_RULES should
     // appear AND `react-hooks-js` must be in jsPlugins by name.
     const config = createOxlintConfig({
       pluginPath: "/tmp/react-doctor-plugin.js",
-      framework: "unknown",
-      hasReactCompiler: true,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: "/tmp/test", hasReactCompiler: true }),
     });
 
     const reactHooksJsRuleKeys = Object.keys(config.rules).filter((ruleKey) =>
@@ -324,18 +327,16 @@ describe("issue #141: oxlint config must not reference unloaded plugins", () => 
 
     expect(hasReactHooksJsPluginEntry).toBe(true);
     expect(reactHooksJsRuleKeys.length).toBeGreaterThan(0);
+    expect(reactHooksJsRuleKeys.every((ruleKey) => config.rules[ruleKey] === "error")).toBe(true);
   });
 
   it("emits no react-hooks-js rules when customRulesOnly skips the plugin", () => {
     // customRulesOnly forces resolveReactHooksJsPlugin to return null
-    // even when the package is installed. The same code path executes
-    // when the optional peer is genuinely missing, so this case proves
-    // the gating works without uninstalling a workspace dep.
+    // even when the package is installed, so this case proves the gating
+    // works without uninstalling a workspace dependency.
     const config = createOxlintConfig({
       pluginPath: "/tmp/react-doctor-plugin.js",
-      framework: "unknown",
-      hasReactCompiler: true,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: "/tmp/test", hasReactCompiler: true }),
       customRulesOnly: true,
     });
 
@@ -350,6 +351,28 @@ describe("issue #141: oxlint config must not reference unloaded plugins", () => 
     expect(hasReactHooksJsPluginEntry).toBe(false);
   });
 
+  it("emits every react-hooks-js rule at error severity (so they fail CI under --fail-on error)", () => {
+    // Regression for the silent severity downgrade introduced in PR
+    // #140: every `react-hooks-js/*` entry got mass-converted from
+    // `"error"` to `"warn"`, which made "React Compiler can't optimize
+    // this code" diagnostics stop counting toward `errorCount` and
+    // stop tripping the GitHub Action's default `--fail-on error`.
+    // Each compiler diagnostic represents an unoptimizable component
+    // shape — surfacing as warnings hid real perf regressions.
+    const config = createOxlintConfig({
+      pluginPath: "/tmp/react-doctor-plugin.js",
+      project: buildTestProject({ rootDirectory: "/tmp/test", hasReactCompiler: true }),
+    });
+
+    const compilerSeverities = Object.entries(config.rules)
+      .filter(([ruleKey]) => ruleKey.startsWith("react-hooks-js/"))
+      .map(([ruleKey, severity]) => ({ ruleKey, severity }));
+
+    expect(compilerSeverities.length).toBeGreaterThan(0);
+    const nonErrorEntries = compilerSeverities.filter((entry) => entry.severity !== "error");
+    expect(nonErrorEntries).toEqual([]);
+  });
+
   it("only enables react-hooks-js rules that the resolved plugin actually exports", async () => {
     // The workspace pins eslint-plugin-react-hooks@7, so every
     // configured react-hooks-js/* rule MUST exist in the loaded
@@ -359,9 +382,7 @@ describe("issue #141: oxlint config must not reference unloaded plugins", () => 
     // 'react-hooks-js'".
     const config = createOxlintConfig({
       pluginPath: "/tmp/react-doctor-plugin.js",
-      framework: "unknown",
-      hasReactCompiler: true,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: "/tmp/test", hasReactCompiler: true }),
     });
     const pluginModule = await import("eslint-plugin-react-hooks");
     const availableRuleNames = new Set(
@@ -370,6 +391,60 @@ describe("issue #141: oxlint config must not reference unloaded plugins", () => 
     const enabledRuleNames = Object.keys(config.rules)
       .filter((ruleKey) => ruleKey.startsWith("react-hooks-js/"))
       .map((ruleKey) => ruleKey.replace(/^react-hooks-js\//, ""));
+    expect(enabledRuleNames.length).toBeGreaterThan(0);
+    for (const ruleName of enabledRuleNames) {
+      expect(availableRuleNames.has(ruleName)).toBe(true);
+    }
+  });
+
+  it("loads eslint-plugin-react-you-might-not-need-an-effect when installed (#187)", () => {
+    const config = createOxlintConfig({
+      pluginPath: "/tmp/react-doctor-plugin.js",
+      project: buildTestProject({ rootDirectory: "/tmp/test" }),
+    });
+
+    const effectRuleKeys = Object.keys(config.rules).filter((ruleKey) =>
+      ruleKey.startsWith("effect/"),
+    );
+    const hasEffectPluginEntry = config.jsPlugins.some(
+      (jsPlugin) => typeof jsPlugin === "object" && jsPlugin.name === "effect",
+    );
+
+    expect(hasEffectPluginEntry).toBe(true);
+    expect(effectRuleKeys.length).toBeGreaterThan(0);
+    expect(effectRuleKeys.every((ruleKey) => config.rules[ruleKey] === "warn")).toBe(true);
+  });
+
+  it("emits no effect/* rules when customRulesOnly skips third-party plugins (#187)", () => {
+    const config = createOxlintConfig({
+      pluginPath: "/tmp/react-doctor-plugin.js",
+      project: buildTestProject({ rootDirectory: "/tmp/test" }),
+      customRulesOnly: true,
+    });
+
+    const effectRuleKeys = Object.keys(config.rules).filter((ruleKey) =>
+      ruleKey.startsWith("effect/"),
+    );
+    const hasEffectPluginEntry = config.jsPlugins.some(
+      (jsPlugin) => typeof jsPlugin === "object" && jsPlugin.name === "effect",
+    );
+
+    expect(effectRuleKeys).toHaveLength(0);
+    expect(hasEffectPluginEntry).toBe(false);
+  });
+
+  it("only enables effect/* rules that the resolved plugin actually exports (#187)", async () => {
+    const config = createOxlintConfig({
+      pluginPath: "/tmp/react-doctor-plugin.js",
+      project: buildTestProject({ rootDirectory: "/tmp/test" }),
+    });
+    const pluginModule = await import("eslint-plugin-react-you-might-not-need-an-effect");
+    const availableRuleNames = new Set(
+      Object.keys((pluginModule.default ?? pluginModule).rules ?? {}),
+    );
+    const enabledRuleNames = Object.keys(config.rules)
+      .filter((ruleKey) => ruleKey.startsWith("effect/"))
+      .map((ruleKey) => ruleKey.replace(/^effect\//, ""));
     expect(enabledRuleNames.length).toBeGreaterThan(0);
     for (const ruleName of enabledRuleNames) {
       expect(availableRuleNames.has(ruleName)).toBe(true);

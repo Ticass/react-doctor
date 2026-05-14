@@ -1,11 +1,12 @@
 import { createRequire } from "node:module";
-import type { Framework } from "./types.js";
+import type { ProjectInfo } from "./types.js";
+import { isTailwindAtLeast, parseTailwindMajorMinor } from "./utils/parse-tailwind-major-minor.js";
 
 const esmRequire = createRequire(import.meta.url);
 
-type RuleSeverity = "error" | "warn" | "off";
+export type RuleSeverity = "error" | "warn" | "off";
 
-const NEXTJS_RULES: Record<string, RuleSeverity> = {
+export const NEXTJS_RULES: Record<string, RuleSeverity> = {
   "react-doctor/nextjs-no-img-element": "warn",
   "react-doctor/nextjs-async-client-component": "error",
   "react-doctor/nextjs-no-a-element": "warn",
@@ -24,7 +25,7 @@ const NEXTJS_RULES: Record<string, RuleSeverity> = {
   "react-doctor/nextjs-no-side-effect-in-get-handler": "error",
 };
 
-const REACT_NATIVE_RULES: Record<string, RuleSeverity> = {
+export const REACT_NATIVE_RULES: Record<string, RuleSeverity> = {
   "react-doctor/rn-no-raw-text": "error",
   "react-doctor/rn-no-deprecated-modules": "error",
   "react-doctor/rn-no-legacy-expo-packages": "warn",
@@ -51,7 +52,7 @@ const REACT_NATIVE_RULES: Record<string, RuleSeverity> = {
   "react-doctor/rn-style-prefer-boxshadow": "warn",
 };
 
-const TANSTACK_START_RULES: Record<string, RuleSeverity> = {
+export const TANSTACK_START_RULES: Record<string, RuleSeverity> = {
   "react-doctor/tanstack-start-route-property-order": "error",
   "react-doctor/tanstack-start-no-direct-fetch-in-loader": "warn",
   "react-doctor/tanstack-start-server-fn-validate-input": "warn",
@@ -68,37 +69,66 @@ const TANSTACK_START_RULES: Record<string, RuleSeverity> = {
   "react-doctor/tanstack-start-loader-parallel-fetch": "warn",
 };
 
+// HACK: every diagnostic from `eslint-plugin-react-hooks` (the React
+// Compiler frontend, oxlint-namespaced as `react-hooks-js`) ships at
+// `"error"` severity. Each one represents a code shape the compiler
+// cannot optimize — leaving the surrounding component un-memoized at
+// runtime — so we want the GitHub Action's default `--fail-on error`
+// to trip on these. PR #140 silently downgraded the whole map to
+// `"warn"` as part of a broader refactor, which made "React Compiler
+// can't optimize this code" diagnostics stop counting toward
+// `errorCount` and stop failing CI; restored here.
+// HACK: complementary rule surface from
+// `eslint-plugin-react-you-might-not-need-an-effect` (#187). These
+// fire alongside react-doctor's native `state-and-effects` rules when
+// the plugin is installed, providing additional anti-pattern
+// detection for effects. Severities are `warn` to match the rest of
+// the effects-rule cohort and avoid changing CI pass/fail behavior
+// for projects that adopt the plugin.
+const YOU_MIGHT_NOT_NEED_EFFECT_RULES: Record<string, RuleSeverity> = {
+  "effect/no-derived-state": "warn",
+  "effect/no-chain-state-updates": "warn",
+  "effect/no-event-handler": "warn",
+  "effect/no-adjust-state-on-prop-change": "warn",
+  "effect/no-reset-all-state-on-prop-change": "warn",
+  "effect/no-pass-live-state-to-parent": "warn",
+  "effect/no-pass-data-to-parent": "warn",
+  "effect/no-initialize-state": "warn",
+};
+
 const REACT_COMPILER_RULES: Record<string, RuleSeverity> = {
-  "react-hooks-js/set-state-in-render": "warn",
-  "react-hooks-js/immutability": "warn",
-  "react-hooks-js/refs": "warn",
-  "react-hooks-js/purity": "warn",
-  "react-hooks-js/hooks": "warn",
-  "react-hooks-js/set-state-in-effect": "warn",
-  "react-hooks-js/globals": "warn",
-  "react-hooks-js/error-boundaries": "warn",
-  "react-hooks-js/preserve-manual-memoization": "warn",
-  "react-hooks-js/unsupported-syntax": "warn",
-  "react-hooks-js/component-hook-factories": "warn",
-  "react-hooks-js/static-components": "warn",
-  "react-hooks-js/use-memo": "warn",
-  "react-hooks-js/void-use-memo": "warn",
-  "react-hooks-js/incompatible-library": "warn",
-  "react-hooks-js/todo": "warn",
+  "react-hooks-js/set-state-in-render": "error",
+  "react-hooks-js/immutability": "error",
+  "react-hooks-js/refs": "error",
+  "react-hooks-js/purity": "error",
+  "react-hooks-js/hooks": "error",
+  "react-hooks-js/set-state-in-effect": "error",
+  "react-hooks-js/globals": "error",
+  "react-hooks-js/error-boundaries": "error",
+  "react-hooks-js/preserve-manual-memoization": "error",
+  "react-hooks-js/unsupported-syntax": "error",
+  "react-hooks-js/component-hook-factories": "error",
+  "react-hooks-js/static-components": "error",
+  "react-hooks-js/use-memo": "error",
+  "react-hooks-js/void-use-memo": "error",
+  "react-hooks-js/incompatible-library": "error",
+  "react-hooks-js/todo": "error",
 };
 
 interface OxlintConfigOptions {
   pluginPath: string;
-  framework: Framework;
-  hasReactCompiler: boolean;
-  hasTanStackQuery: boolean;
+  project: ProjectInfo;
   customRulesOnly?: boolean;
+  extendsPaths?: string[];
+  ignoredTags?: ReadonlySet<string>;
 }
 
-interface ReactHooksJsPluginEntry {
+interface JsPluginEntry {
   name: string;
   specifier: string;
 }
+
+type ReactHooksJsPluginEntry = JsPluginEntry;
 
 interface ResolvedReactHooksJsPlugin {
   entry: ReactHooksJsPluginEntry;
@@ -113,11 +143,11 @@ interface MaybePluginModule {
 
 const readPluginRuleNames = (pluginSpecifier: string): ReadonlySet<string> => {
   // HACK: oxlint resolves the plugin itself at scan time; we just need
-  // a fast-and-dirty rule-name listing to filter our config so we don't
+  // a fast rule-name listing to filter our config so we don't
   // reference rules that don't exist in the user's installed version
-  // (e.g. void-use-memo lives in v7 but not v6 of eslint-plugin-react-hooks,
-  // and our peer range is `^6 || ^7`). Failing to read the module is
-  // non-fatal — we fall back to enabling every rule the user has us
+  // (e.g. older eslint-plugin-react-hooks releases do not expose every
+  // compiler rule). Failing to read the module is non-fatal — we fall
+  // back to enabling every rule we have
   // configured for and let oxlint surface the mismatch (which preserves
   // pre-fix behavior for unknown plugin shapes).
   try {
@@ -147,6 +177,34 @@ const resolveReactHooksJsPlugin = (
   };
 };
 
+interface ResolvedYouMightNotNeedEffectPlugin {
+  entry: JsPluginEntry;
+  availableRuleNames: ReadonlySet<string>;
+}
+
+// HACK: oxlint-namespaces this third-party ESLint plugin under
+// `effect` so the long upstream package name doesn't clutter rule
+// keys. Issue #187 — adds the plugin's complementary rule surface
+// alongside react-doctor's native `state-and-effects` rules. The
+// plugin is opt-in: skipped when not installed (peer is optional).
+const YOU_MIGHT_NOT_NEED_EFFECT_NAMESPACE = "effect";
+
+const resolveYouMightNotNeedEffectPlugin = (
+  customRulesOnly: boolean,
+): ResolvedYouMightNotNeedEffectPlugin | null => {
+  if (customRulesOnly) return null;
+  let pluginSpecifier: string;
+  try {
+    pluginSpecifier = esmRequire.resolve("eslint-plugin-react-you-might-not-need-an-effect");
+  } catch {
+    return null;
+  }
+  return {
+    entry: { name: YOU_MIGHT_NOT_NEED_EFFECT_NAMESPACE, specifier: pluginSpecifier },
+    availableRuleNames: readPluginRuleNames(pluginSpecifier),
+  };
+};
+
 const filterRulesToAvailable = (
   rules: Record<string, RuleSeverity>,
   pluginNamespace: string,
@@ -171,7 +229,7 @@ const filterRulesToAvailable = (
   return filtered;
 };
 
-const TANSTACK_QUERY_RULES: Record<string, RuleSeverity> = {
+export const TANSTACK_QUERY_RULES: Record<string, RuleSeverity> = {
   "react-doctor/query-stable-query-client": "warn",
   "react-doctor/query-no-rest-destructuring": "warn",
   "react-doctor/query-no-void-query-fn": "warn",
@@ -212,23 +270,30 @@ const BUILTIN_A11Y_RULES: Record<string, RuleSeverity> = {
   "jsx-a11y/iframe-has-title": "warn",
 };
 
-const GLOBAL_REACT_DOCTOR_RULES: Record<string, RuleSeverity> = {
+export const GLOBAL_REACT_DOCTOR_RULES: Record<string, RuleSeverity> = {
   "react-doctor/no-derived-state-effect": "warn",
   "react-doctor/no-fetch-in-effect": "warn",
+  "react-doctor/no-mirror-prop-effect": "warn",
+  "react-doctor/no-mutable-in-deps": "error",
   "react-doctor/no-cascading-set-state": "warn",
+  "react-doctor/no-effect-chain": "warn",
   "react-doctor/no-effect-event-handler": "warn",
   "react-doctor/no-effect-event-in-deps": "error",
+  "react-doctor/no-event-trigger-state": "warn",
   "react-doctor/no-prop-callback-in-effect": "warn",
   "react-doctor/no-derived-useState": "warn",
   "react-doctor/no-direct-state-mutation": "warn",
   "react-doctor/no-set-state-in-render": "warn",
+  "react-doctor/prefer-use-effect-event": "warn",
   "react-doctor/prefer-useReducer": "warn",
+  "react-doctor/prefer-use-sync-external-store": "warn",
   "react-doctor/rerender-lazy-state-init": "warn",
   "react-doctor/rerender-functional-setstate": "warn",
   "react-doctor/rerender-dependencies": "error",
   "react-doctor/rerender-state-only-in-handlers": "warn",
   "react-doctor/rerender-defer-reads-hook": "warn",
   "react-doctor/advanced-event-handler-refs": "warn",
+  "react-doctor/effect-needs-cleanup": "error",
 
   "react-doctor/no-giant-component": "warn",
   "react-doctor/no-render-in-render": "warn",
@@ -237,6 +302,10 @@ const GLOBAL_REACT_DOCTOR_RULES: Record<string, RuleSeverity> = {
   "react-doctor/no-render-prop-children": "warn",
   "react-doctor/no-nested-component-definition": "error",
   "react-doctor/react-compiler-destructure-method": "warn",
+  "react-doctor/no-legacy-class-lifecycles": "error",
+  "react-doctor/no-legacy-context-api": "error",
+  "react-doctor/no-default-props": "warn",
+  "react-doctor/no-react-dom-deprecated-apis": "warn",
 
   "react-doctor/no-usememo-simple-expression": "warn",
   "react-doctor/no-layout-property-animation": "error",
@@ -328,7 +397,6 @@ const GLOBAL_REACT_DOCTOR_RULES: Record<string, RuleSeverity> = {
   "react-doctor/design-no-redundant-padding-axes": "warn",
   "react-doctor/design-no-redundant-size-axes": "warn",
   "react-doctor/design-no-space-on-flex-children": "warn",
-  "react-doctor/design-no-em-dash-in-jsx-text": "warn",
   "react-doctor/design-no-three-period-ellipsis": "warn",
   "react-doctor/design-no-default-tailwind-palette": "warn",
   "react-doctor/design-no-vague-button-label": "warn",
@@ -349,25 +417,239 @@ export const ALL_REACT_DOCTOR_RULE_KEYS: ReadonlySet<string> = new Set([
   ...Object.keys(TANSTACK_QUERY_RULES),
 ]);
 
+export const FRAMEWORK_SPECIFIC_RULE_KEYS: ReadonlySet<string> = new Set([
+  ...Object.keys(NEXTJS_RULES),
+  ...Object.keys(REACT_NATIVE_RULES),
+  ...Object.keys(TANSTACK_START_RULES),
+  ...Object.keys(TANSTACK_QUERY_RULES),
+]);
+
+interface RuleMetadataEntry {
+  requires?: ReadonlyArray<string>;
+  tags: ReadonlySet<string>;
+}
+
+const EMPTY_TAGS: ReadonlySet<string> = new Set();
+const TEST_NOISE_TAGS: ReadonlySet<string> = new Set(["test-noise"]);
+const DESIGN_AND_TEST_NOISE_TAGS: ReadonlySet<string> = new Set(["design", "test-noise"]);
+
+export const RULE_METADATA: ReadonlyMap<string, RuleMetadataEntry> = new Map([
+  ["react-doctor/no-react19-deprecated-apis", { requires: ["react:19"], tags: TEST_NOISE_TAGS }],
+  ["react-doctor/no-default-props", { requires: ["react:19"], tags: TEST_NOISE_TAGS }],
+  ["react-doctor/no-react-dom-deprecated-apis", { requires: ["react:18"], tags: TEST_NOISE_TAGS }],
+  ["react-doctor/prefer-use-effect-event", { requires: ["react:19"], tags: TEST_NOISE_TAGS }],
+
+  ["react-doctor/nextjs-no-img-element", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-async-client-component", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-a-element", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/nextjs-no-use-search-params-without-suspense",
+    { requires: ["nextjs"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/nextjs-no-client-fetch-for-server-data",
+    { requires: ["nextjs"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/nextjs-missing-metadata", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-client-side-redirect", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-redirect-in-try-catch", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-image-missing-sizes", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-native-script", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-inline-script-missing-id", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-font-link", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-css-link", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-polyfill-script", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-head-import", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+  ["react-doctor/nextjs-no-side-effect-in-get-handler", { requires: ["nextjs"], tags: EMPTY_TAGS }],
+
+  ["react-doctor/rn-no-raw-text", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-no-deprecated-modules", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-no-legacy-expo-packages", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-no-dimensions-get", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/rn-no-inline-flatlist-renderitem",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/rn-no-legacy-shadow-styles", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-prefer-reanimated", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/rn-no-single-element-style-array",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/rn-prefer-pressable", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-prefer-expo-image", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-no-non-native-navigator", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-no-scroll-state", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-no-scrollview-mapped-list", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/rn-no-inline-object-in-list-item",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/rn-animate-layout-property", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/rn-prefer-content-inset-adjustment",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/rn-pressable-shared-value-mutation",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/rn-list-data-mapped", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-list-callback-per-row", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/rn-list-recyclable-without-types",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/rn-animation-reaction-as-derived",
+    { requires: ["react-native"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/rn-bottom-sheet-prefer-native", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-scrollview-dynamic-padding", { requires: ["react-native"], tags: EMPTY_TAGS }],
+  ["react-doctor/rn-style-prefer-boxshadow", { requires: ["react-native"], tags: EMPTY_TAGS }],
+
+  [
+    "react-doctor/tanstack-start-route-property-order",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-direct-fetch-in-loader",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-server-fn-validate-input",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-useeffect-fetch",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-missing-head-content",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-anchor-element",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-server-fn-method-order",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-navigate-in-render",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-dynamic-server-fn-import",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-use-server-in-handler",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-no-secrets-in-loader",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  ["react-doctor/tanstack-start-get-mutation", { requires: ["tanstack-start"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/tanstack-start-redirect-in-try-catch",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/tanstack-start-loader-parallel-fetch",
+    { requires: ["tanstack-start"], tags: EMPTY_TAGS },
+  ],
+
+  ["react-doctor/query-stable-query-client", { requires: ["tanstack-query"], tags: EMPTY_TAGS }],
+  ["react-doctor/query-no-rest-destructuring", { requires: ["tanstack-query"], tags: EMPTY_TAGS }],
+  ["react-doctor/query-no-void-query-fn", { requires: ["tanstack-query"], tags: EMPTY_TAGS }],
+  ["react-doctor/query-no-query-in-effect", { requires: ["tanstack-query"], tags: EMPTY_TAGS }],
+  [
+    "react-doctor/query-mutation-missing-invalidation",
+    { requires: ["tanstack-query"], tags: EMPTY_TAGS },
+  ],
+  [
+    "react-doctor/query-no-usequery-for-mutation",
+    { requires: ["tanstack-query"], tags: EMPTY_TAGS },
+  ],
+
+  ["react-doctor/design-no-bold-heading", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/design-no-redundant-padding-axes", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  [
+    "react-doctor/design-no-redundant-size-axes",
+    { requires: ["tailwind:3.4"], tags: DESIGN_AND_TEST_NOISE_TAGS },
+  ],
+  ["react-doctor/design-no-space-on-flex-children", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/design-no-three-period-ellipsis", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/design-no-default-tailwind-palette", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/design-no-vague-button-label", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/no-side-tab-border", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/no-pure-black-background", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/no-gradient-text", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+  ["react-doctor/no-dark-mode-glow", { tags: DESIGN_AND_TEST_NOISE_TAGS }],
+]);
+
+const buildCapabilities = (project: ProjectInfo): ReadonlySet<string> => {
+  const capabilities = new Set<string>();
+
+  capabilities.add(project.framework);
+  if (project.framework === "expo" || project.framework === "react-native") {
+    capabilities.add("react-native");
+  }
+
+  // HACK: when version detection fails (null), assume the latest React
+  // major so every version-gated rule fires. Silently dropping rules
+  // on detection failure was the worse outcome in practice.
+  const reactMajor = project.reactMajorVersion;
+  const effectiveReactMajor = reactMajor ?? 99;
+  for (let major = 17; major <= effectiveReactMajor; major++) {
+    capabilities.add(`react:${major}`);
+  }
+
+  if (project.tailwindVersion !== null) {
+    capabilities.add("tailwind");
+    const tailwind = parseTailwindMajorMinor(project.tailwindVersion);
+    // HACK: when version is unparseable (dist-tag, workspace protocol),
+    // assume latest so version-gated rules still fire.
+    if (isTailwindAtLeast(tailwind, { major: 3, minor: 4 })) {
+      capabilities.add("tailwind:3.4");
+    }
+  }
+
+  if (project.hasReactCompiler) capabilities.add("react-compiler");
+  if (project.hasTanStackQuery) capabilities.add("tanstack-query");
+  if (project.hasTypeScript) capabilities.add("typescript");
+
+  return capabilities;
+};
+
+const shouldEnableRule = (
+  requires: ReadonlyArray<string> | undefined,
+  tags: ReadonlySet<string>,
+  capabilities: ReadonlySet<string>,
+  ignoredTags: ReadonlySet<string>,
+): boolean => {
+  if (requires) {
+    for (const capability of requires) {
+      if (!capabilities.has(capability)) return false;
+    }
+  }
+  for (const tag of tags) {
+    if (ignoredTags.has(tag)) return false;
+  }
+  return true;
+};
+
 export const createOxlintConfig = ({
   pluginPath,
-  framework,
-  hasReactCompiler,
-  hasTanStackQuery,
+  project,
   customRulesOnly = false,
+  extendsPaths = [],
+  ignoredTags = new Set<string>(),
 }: OxlintConfigOptions) => {
-  // HACK: REACT_COMPILER_RULES live under the `react-hooks-js` plugin
-  // namespace, which is provided by the (optional peer) eslint-plugin-react-hooks
-  // package. Two failure modes oxlint won't tolerate:
-  //   1. plugin missing entirely → "Plugin 'react-hooks-js' not found" (#141)
-  //   2. plugin installed but at an older version that lacks one of our
-  //      configured rules → "Rule '<rule>' not found in plugin 'react-hooks-js'"
-  //      (e.g. v6 has no `void-use-memo`, peer range is `^6 || ^7`)
-  // Gate the rules on successful plugin resolution AND filter to the
-  // rule names the loaded plugin actually exports. A missing optional
-  // peer or version drift then silently skips just the affected rules
-  // instead of crashing the whole scan.
-  const reactHooksJsPlugin = resolveReactHooksJsPlugin(hasReactCompiler, customRulesOnly);
+  const reactHooksJsPlugin = resolveReactHooksJsPlugin(project.hasReactCompiler, customRulesOnly);
   const reactCompilerRules = reactHooksJsPlugin
     ? filterRulesToAvailable(
         REACT_COMPILER_RULES,
@@ -375,7 +657,46 @@ export const createOxlintConfig = ({
         reactHooksJsPlugin.availableRuleNames,
       )
     : {};
+
+  const youMightNotNeedEffectPlugin = resolveYouMightNotNeedEffectPlugin(customRulesOnly);
+  const youMightNotNeedEffectRules = youMightNotNeedEffectPlugin
+    ? filterRulesToAvailable(
+        YOU_MIGHT_NOT_NEED_EFFECT_RULES,
+        YOU_MIGHT_NOT_NEED_EFFECT_NAMESPACE,
+        youMightNotNeedEffectPlugin.availableRuleNames,
+      )
+    : {};
+
+  const jsPlugins: JsPluginEntry[] = [];
+  if (reactHooksJsPlugin) jsPlugins.push(reactHooksJsPlugin.entry);
+  if (youMightNotNeedEffectPlugin) jsPlugins.push(youMightNotNeedEffectPlugin.entry);
+
+  const capabilities = buildCapabilities(project);
+
+  const enabledReactDoctorRules: Record<string, RuleSeverity> = {};
+  const allRuleMaps = [
+    GLOBAL_REACT_DOCTOR_RULES,
+    NEXTJS_RULES,
+    REACT_NATIVE_RULES,
+    TANSTACK_START_RULES,
+    TANSTACK_QUERY_RULES,
+  ];
+  for (const ruleMap of allRuleMaps) {
+    for (const [ruleKey, severity] of Object.entries(ruleMap)) {
+      const metadata = RULE_METADATA.get(ruleKey);
+      if (!metadata) {
+        if (FRAMEWORK_SPECIFIC_RULE_KEYS.has(ruleKey)) continue;
+        enabledReactDoctorRules[ruleKey] = severity;
+        continue;
+      }
+      if (shouldEnableRule(metadata.requires, metadata.tags, capabilities, ignoredTags)) {
+        enabledReactDoctorRules[ruleKey] = severity;
+      }
+    }
+  }
+
   return {
+    ...(extendsPaths.length > 0 ? { extends: extendsPaths } : {}),
     categories: {
       correctness: "off",
       suspicious: "off",
@@ -386,16 +707,13 @@ export const createOxlintConfig = ({
       nursery: "off",
     },
     plugins: customRulesOnly ? [] : ["react", "jsx-a11y"],
-    jsPlugins: reactHooksJsPlugin ? [reactHooksJsPlugin.entry, pluginPath] : [pluginPath],
+    jsPlugins: [...jsPlugins, pluginPath],
     rules: {
       ...(customRulesOnly ? {} : BUILTIN_REACT_RULES),
       ...(customRulesOnly ? {} : BUILTIN_A11Y_RULES),
       ...reactCompilerRules,
-      ...GLOBAL_REACT_DOCTOR_RULES,
-      ...(framework === "nextjs" ? NEXTJS_RULES : {}),
-      ...(framework === "expo" || framework === "react-native" ? REACT_NATIVE_RULES : {}),
-      ...(framework === "tanstack-start" ? TANSTACK_START_RULES : {}),
-      ...(hasTanStackQuery ? TANSTACK_QUERY_RULES : {}),
+      ...youMightNotNeedEffectRules,
+      ...enabledReactDoctorRules,
     },
   };
 };

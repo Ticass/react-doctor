@@ -1,0 +1,47 @@
+import { HOOKS_WITH_DEPS } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const rerenderDependencies = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNode) {
+      if (!isHookCall(node, HOOKS_WITH_DEPS) || node.arguments.length < 2) return;
+      const depsNode = node.arguments[1];
+      if (depsNode.type !== "ArrayExpression") return;
+
+      for (const element of depsNode.elements ?? []) {
+        if (!element) continue;
+        if (element.type === "ObjectExpression") {
+          context.report({
+            node: element,
+            message:
+              "Object literal in useEffect deps — creates new reference every render, causing infinite re-runs",
+          });
+        }
+        if (element.type === "ArrayExpression") {
+          context.report({
+            node: element,
+            message:
+              "Array literal in useEffect deps — creates new reference every render, causing infinite re-runs",
+          });
+        }
+        // HACK: arrow / function expressions create a fresh function
+        // reference every render, same problem as object/array literals.
+        // The fix is to either lift the function out of the component
+        // (if it doesn't read reactive values) or wrap it in
+        // `useCallback`. Covered by `Removing Effect Dependencies` §
+        // "Does some reactive value change unintentionally?".
+        if (element.type === "ArrowFunctionExpression" || element.type === "FunctionExpression") {
+          context.report({
+            node: element,
+            message:
+              "Inline function in useEffect deps — creates a new function reference every render, causing infinite re-runs. Hoist it out of the component or wrap it with useCallback",
+          });
+        }
+      }
+    },
+  }),
+});

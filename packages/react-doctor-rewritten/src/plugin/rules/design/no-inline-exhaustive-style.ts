@@ -1,0 +1,26 @@
+import { INLINE_STYLE_PROPERTY_THRESHOLD } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+import { getInlineStyleExpression } from "./utils/get-inline-style-expression.js";
+
+export const noInlineExhaustiveStyle = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    JSXAttribute(node: EsTreeNode) {
+      const expression = getInlineStyleExpression(node);
+      if (!expression) return;
+
+      const propertyCount =
+        expression.properties?.filter((property: EsTreeNode) => property.type === "Property")
+          .length ?? 0;
+
+      if (propertyCount >= INLINE_STYLE_PROPERTY_THRESHOLD) {
+        context.report({
+          node: expression,
+          message: `${propertyCount} inline style properties — extract to a CSS class, CSS module, or styled component for maintainability and reuse`,
+        });
+      }
+    },
+  }),
+});

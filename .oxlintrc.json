@@ -1,4 +1,5 @@
 {
   "plugins": ["typescript", "react", "import"],
+  "ignorePatterns": ["packages/react-doctor-rewritten/tests/fixtures/**", "node_modules/**"],
   "rules": {}
 }

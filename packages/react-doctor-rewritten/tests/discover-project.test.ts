@@ -33,6 +33,60 @@ describe("discoverProject", () => {
     expect(projectInfo.reactVersion).toBe("^18.0.0 || ^19.0.0");
   });
 
+  it("detects Tailwind version from devDependencies when present", () => {
+    const projectDirectory = path.join(tempDirectory, "tw-from-dev-deps");
+    fs.mkdirSync(projectDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDirectory, "package.json"),
+      JSON.stringify({
+        name: "tw-app",
+        dependencies: { react: "^19.0.0" },
+        devDependencies: { tailwindcss: "^3.4.1" },
+      }),
+    );
+
+    const projectInfo = discoverProject(projectDirectory);
+    expect(projectInfo.tailwindVersion).toBe("^3.4.1");
+  });
+
+  it("returns null tailwindVersion when neither the project nor its monorepo root depend on Tailwind", () => {
+    const projectDirectory = path.join(tempDirectory, "tw-not-installed");
+    fs.mkdirSync(projectDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDirectory, "package.json"),
+      JSON.stringify({
+        name: "no-tw-app",
+        dependencies: { react: "^19.0.0" },
+      }),
+    );
+
+    const projectInfo = discoverProject(projectDirectory);
+    expect(projectInfo.tailwindVersion).toBeNull();
+  });
+
+  it("resolves Tailwind version from a pnpm workspace catalog", () => {
+    const monorepoRoot = path.join(tempDirectory, "tw-from-pnpm-catalog");
+    fs.mkdirSync(path.join(monorepoRoot, "packages", "ui"), { recursive: true });
+    fs.writeFileSync(
+      path.join(monorepoRoot, "pnpm-workspace.yaml"),
+      "packages:\n  - packages/*\n\ncatalog:\n  react: ^19.0.0\n  tailwindcss: ^4.0.0\n",
+    );
+    fs.writeFileSync(
+      path.join(monorepoRoot, "package.json"),
+      JSON.stringify({ name: "monorepo", private: true }),
+    );
+    fs.writeFileSync(
+      path.join(monorepoRoot, "packages", "ui", "package.json"),
+      JSON.stringify({
+        name: "ui",
+        dependencies: { react: "catalog:", tailwindcss: "catalog:" },
+      }),
+    );
+
+    const projectInfo = discoverProject(path.join(monorepoRoot, "packages", "ui"));
+    expect(projectInfo.tailwindVersion).toBe("^4.0.0");
+  });
+
   it("throws when package.json is missing", () => {
     expect(() => discoverProject("/nonexistent/path")).toThrow("No package.json found");
   });
@@ -66,8 +120,21 @@ describe("discoverProject", () => {
     expect(projectInfo.reactVersion).toBe("^19.1.4");
   });
 
+  it("resolves React version from Bun grouped workspace catalog", () => {
+    const projectInfo = discoverProject(
+      path.join(FIXTURES_DIRECTORY, "bun-grouped-catalog", "apps", "web"),
+    );
+    expect(projectInfo.reactVersion).toBe("19.2.0");
+  });
+
+  it("picks the leaf-referenced group when multiple Bun grouped catalogs define the same package", () => {
+    const projectInfo = discoverProject(
+      path.join(FIXTURES_DIRECTORY, "bun-multiple-grouped-catalogs", "apps", "web"),
+    );
+    expect(projectInfo.reactVersion).toBe("19.2.0");
+  });
+
   it("resolves React version when only in peerDependencies with catalog reference", () => {
-    const projectDirectory = path.join(tempDirectory, "peer-deps-catalog");
     const monorepoRoot = path.join(tempDirectory, "peer-deps-catalog-root");
     fs.mkdirSync(path.join(monorepoRoot, "packages", "ui"), { recursive: true });
     fs.writeFileSync(
@@ -259,6 +326,52 @@ describe("discoverReactSubprojects", () => {
     expect(packages).toHaveLength(2);
     expect(packages[0]).toEqual({ name: "my-app", directory: rootDirectory });
     expect(packages[1]).toEqual({ name: "my-extension", directory: subdirectory });
+  });
+
+  it("includes deeply nested React packages", () => {
+    const rootDirectory = path.join(tempDirectory, "deep-react-package");
+    const subdirectory = path.join(rootDirectory, "apps", "web");
+    fs.mkdirSync(subdirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(subdirectory, "package.json"),
+      JSON.stringify({ name: "web", dependencies: { react: "^19.0.0" } }),
+    );
+
+    const packages = discoverReactSubprojects(rootDirectory);
+    expect(packages).toContainEqual({ name: "web", directory: subdirectory });
+  });
+
+  it("prefers pnpm workspace packages over filesystem recursion", () => {
+    const rootDirectory = path.join(tempDirectory, "pnpm-workspace-preferred");
+    const workspaceDirectory = path.join(rootDirectory, "apps", "web");
+    const unlistedDirectory = path.join(rootDirectory, "examples", "preview");
+    fs.mkdirSync(workspaceDirectory, { recursive: true });
+    fs.mkdirSync(unlistedDirectory, { recursive: true });
+    fs.writeFileSync(path.join(rootDirectory, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+    fs.writeFileSync(
+      path.join(workspaceDirectory, "package.json"),
+      JSON.stringify({ name: "web", dependencies: { react: "^19.0.0" } }),
+    );
+    fs.writeFileSync(
+      path.join(unlistedDirectory, "package.json"),
+      JSON.stringify({ name: "preview", dependencies: { react: "^19.0.0" } }),
+    );
+
+    const packages = discoverReactSubprojects(rootDirectory);
+    expect(packages).toEqual([{ name: "web", directory: workspaceDirectory }]);
+  });
+
+  it("skips ignored generated directories during filesystem recursion", () => {
+    const rootDirectory = path.join(tempDirectory, "ignored-generated-directories");
+    const ignoredDirectory = path.join(rootDirectory, "node_modules", "preview");
+    fs.mkdirSync(ignoredDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(ignoredDirectory, "package.json"),
+      JSON.stringify({ name: "preview", dependencies: { react: "^19.0.0" } }),
+    );
+
+    const packages = discoverReactSubprojects(rootDirectory);
+    expect(packages).toHaveLength(0);
   });
 
   it("does not match packages with only @types/react", () => {

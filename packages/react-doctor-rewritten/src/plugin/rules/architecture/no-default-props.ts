@@ -1,0 +1,31 @@
+import { defineRule } from "../../utils/define-rule.js";
+import { isUppercaseName } from "../../utils/is-uppercase-name.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+// HACK: React 19 removes `Component.defaultProps` for FUNCTION components
+// (class components still tolerate it but the team recommends ES6
+// default parameters anyway). Detection target: any
+// `<Identifier>.defaultProps = <ObjectExpression>` assignment where the
+// identifier looks like a component (uppercase first letter). We can't
+// distinguish class vs function from the assignment alone, but the
+// recommendation is the same either way — switch to ES6 default params
+// in destructured props — so the guidance is uniform.
+export const noDefaultProps = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    AssignmentExpression(node: EsTreeNode) {
+      if (node.operator !== "=") return;
+      const left = node.left;
+      if (left?.type !== "MemberExpression") return;
+      if (left.computed) return;
+      if (left.property?.type !== "Identifier" || left.property.name !== "defaultProps") return;
+      if (left.object?.type !== "Identifier") return;
+      if (!isUppercaseName(left.object.name)) return;
+      context.report({
+        node: left,
+        message: `${left.object.name}.defaultProps — React 19 removes \`defaultProps\` for function components and discourages it for class components. Move defaults into the destructured props parameter (e.g. \`function ${left.object.name}({ size = "md", ...rest })\`) so the rule applies cleanly to both shapes`,
+      });
+    },
+  }),
+});

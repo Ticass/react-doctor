@@ -23,11 +23,12 @@ import type { ReactDoctorConfig, ScanResult } from "../../src/types.js";
 import {
   encodeAnnotationProperty,
   encodeAnnotationMessage,
-} from "../../src/utils/annotation-encoding.js";
+} from "../../src/cli/annotation-encoding.js";
 import { setupReactProject, writeFile, writeJson } from "./_helpers.js";
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "..", "..");
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rd-cli-and-output-"));
+const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, "g");
 
 afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -37,6 +38,8 @@ const setupMinimalReactProject = (caseId: string): string =>
   setupReactProject(tempRoot, caseId, {
     files: { "src/App.tsx": `export const App = () => null;\n` },
   });
+
+const stripAnsi = (text: string): string => text.replace(ANSI_ESCAPE_PATTERN, "");
 
 // Capture every line `scan()` writes to console while it runs. We use
 // real I/O (logger / spinner / console.log) rather than scrub source
@@ -164,6 +167,44 @@ export const App = ({ name }: { name: string }) => {
     writeJson(path.join(projectDir2, "react-doctor.config.json"), { share: false });
     const disabledRun = await captureScanOutput(projectDir2, { offline: false });
     expect(disabledRun.stdout).not.toContain("Share your results");
+  });
+});
+
+describe("default CLI issue output", () => {
+  it("groups default findings by category and keeps the score summary after issues", async () => {
+    const projectDir = setupReactProject(tempRoot, "default-output-category-list", {
+      files: {
+        "src/Cart.tsx": `import { useState } from "react";
+
+export const Cart = () => {
+  const [items, setItems] = useState<string[]>([]);
+  void setItems;
+
+  const onAdd = (nextItem: string) => {
+    items.push(nextItem);
+    items.sort();
+  };
+
+  return <button onClick={() => onAdd("x")}>{items.length}</button>;
+};
+`,
+      },
+    });
+
+    const { stdout } = await captureScanOutput(projectDir, {
+      lint: true,
+      deadCode: false,
+      offline: true,
+    });
+    const normalizedStdout = stripAnsi(stdout);
+
+    expect(normalizedStdout).toMatch(/State & Effects \d+ issues/);
+    expect(normalizedStdout).toContain("  ⚠ Direct state mutation ×2");
+    expect(normalizedStdout).toContain("    src/Cart.tsx:");
+    expect(normalizedStdout.indexOf("Direct state mutation")).toBeLessThan(
+      normalizedStdout.indexOf("React Doctor"),
+    );
+    expect(normalizedStdout).not.toContain("  By category");
   });
 });
 

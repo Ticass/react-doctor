@@ -215,8 +215,7 @@ module.exports = async function ({ github, context, core }) {
     core.info("Report exceeds GitHub comment limit, truncating.");
 
     finalReport =
-      report.slice(0, MAX_COMMENT_LENGTH) +
-      "\n\n---\n⚠️ Report truncated due to size limits.";
+      report.slice(0, MAX_COMMENT_LENGTH) + "\n\n---\n⚠️ Report truncated due to size limits.";
 
     if (artifactUrl) {
       finalReport += `\n📎 Full report: ${artifactUrl}`;
@@ -225,16 +224,13 @@ module.exports = async function ({ github, context, core }) {
 
   const body = `${marker}\n${finalReport}`;
 
-  const comments = await github.paginate(
-    github.rest.issues.listComments,
-    {
-      ...context.repo,
-      issue_number: context.issue.number,
-      per_page: 100,
-    }
-  );
+  const comments = await github.paginate(github.rest.issues.listComments, {
+    ...context.repo,
+    issue_number: context.issue.number,
+    per_page: 100,
+  });
 
-  const prev = comments.find(c => c.body?.includes(marker));
+  const prev = comments.find((c) => c.body?.includes(marker));
 
   if (prev) {
     await github.rest.issues.updateComment({
@@ -251,7 +247,6 @@ module.exports = async function ({ github, context, core }) {
   }
 };
 ```
-
 
 `fetch-depth: 0` is required so `--hide-branding-pr` can compute the diff against the base branch.
 

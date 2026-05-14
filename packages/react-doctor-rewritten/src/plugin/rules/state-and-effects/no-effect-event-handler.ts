@@ -1,0 +1,64 @@
+import { EFFECT_HOOK_NAMES } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { getCallbackStatements } from "../../utils/get-callback-statements.js";
+import { getEffectCallback } from "../../utils/get-effect-callback.js";
+import { getRootIdentifierName } from "../../utils/get-root-identifier-name.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+export const noEffectEventHandler = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNode) {
+      if (!isHookCall(node, EFFECT_HOOK_NAMES) || (node.arguments?.length ?? 0) < 2) return;
+
+      const callback = getEffectCallback(node);
+      if (!callback) return;
+
+      const depsNode = node.arguments[1];
+      if (depsNode.type !== "ArrayExpression" || !depsNode.elements?.length) return;
+
+      const dependencyNames = new Set(
+        depsNode.elements
+          .filter((element: EsTreeNode) => element?.type === "Identifier")
+          .map((element: EsTreeNode) => element.name),
+      );
+
+      const statements = getCallbackStatements(callback);
+      if (statements.length !== 1) return;
+
+      const soleStatement = statements[0];
+      if (soleStatement.type !== "IfStatement") return;
+
+      // HACK: §5 of "You Might Not Need an Effect" uses
+      // `if (product.isInCart)` — a MemberExpression, not a bare
+      // Identifier. The earlier detector hard-required `Identifier`
+      // and missed the article's literal example. Walk the test
+      // down to its root identifier so both shapes match:
+      //   if (isOpen)            → root = "isOpen"
+      //   if (product.isInCart)  → root = "product"
+      const rootIdentifierName = getRootIdentifierName(soleStatement.test);
+      if (!rootIdentifierName || !dependencyNames.has(rootIdentifierName)) return;
+
+      // Don't defer to `noEventTriggerState` here. The previous
+      // implementation tried to ("if the body looks event-shaped,
+      // let the more specific rule report"), but that deference
+      // could silently drop diagnostics: `noEventTriggerState`
+      // requires several preconditions this visitor can't cheaply
+      // verify (single dep, handler-only writes for that state,
+      // and not render-reachable). When any of those failed, the
+      // narrow rule didn't fire AND this rule deferred, so the
+      // user got nothing. Both rules fire independently — the two
+      // messages frame the same code differently ("this useEffect
+      // simulates a handler" vs "this state exists only to schedule
+      // X from an effect") and a duplicate diagnostic is strictly
+      // better than a silent drop.
+      context.report({
+        node,
+        message:
+          "useEffect simulating an event handler — move logic to an actual event handler instead",
+      });
+    },
+  }),
+});

@@ -47,6 +47,30 @@ export const fetchAllUsersParallel = async (ids: string[]) => {
   );
 };
 
+// NEGATIVE case for async-await-in-loop: forEach with only sleep-like awaits.
+// The heuristic must suppress the report just as it does for traditional loops.
+declare const sleep: (ms: number) => Promise<void>;
+declare const process: (item: string) => void;
+
+export const throttledForEach = (items: string[]) => {
+  items.forEach(async (item) => {
+    await sleep(500);
+    process(item);
+  });
+};
+
+// NEGATIVE case for async-await-in-loop: forEach with a loop-carried
+// dependency pattern (assign + read in awaited arg).
+declare const fetchPage: (cursor: string) => Promise<{ next: string; data: string[] }>;
+
+export const paginatedForEach = async (cursors: string[]) => {
+  let token = "start";
+  cursors.forEach(async () => {
+    const page = await fetchPage(token);
+    token = page.next;
+  });
+};
+
 // advanced-event-handler-refs: useEffect re-subscribes when handler prop
 // identity changes.
 export const Ticker = ({ onTick }: { onTick: () => void }) => {

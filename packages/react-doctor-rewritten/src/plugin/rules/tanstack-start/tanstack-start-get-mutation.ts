@@ -1,0 +1,36 @@
+import { MUTATING_HTTP_METHODS } from "../../constants.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { findSideEffect } from "../../utils/find-side-effect.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+import { walkServerFnChain } from "./utils/walk-server-fn-chain.js";
+
+export const tanstackStartGetMutation = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNode) {
+      if (node.callee?.type !== "MemberExpression") return;
+      if (node.callee.property?.type !== "Identifier" || node.callee.property.name !== "handler")
+        return;
+
+      const chainInfo = walkServerFnChain(node);
+      if (!chainInfo.isServerFnChain) return;
+      if (
+        chainInfo.specifiedMethod &&
+        MUTATING_HTTP_METHODS.has(chainInfo.specifiedMethod.toUpperCase())
+      )
+        return;
+
+      const handlerFunction = node.arguments?.[0];
+      if (!handlerFunction) return;
+
+      const sideEffect = findSideEffect(handlerFunction);
+      if (sideEffect) {
+        context.report({
+          node,
+          message: `GET server function has side effects (${sideEffect}) — use createServerFn({ method: 'POST' }) for mutations`,
+        });
+      }
+    },
+  }),
+});

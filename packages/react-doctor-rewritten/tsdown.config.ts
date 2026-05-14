@@ -41,7 +41,7 @@ const copySkillToDist = (): void => {
 export default defineConfig([
   {
     entry: {
-      cli: "./src/cli.ts",
+      cli: "./src/cli/index.ts",
     },
     external: ["oxlint", "knip", "knip/session", "agent-install"],
     dts: true,
@@ -74,5 +74,17 @@ export default defineConfig([
     target: "node22",
     platform: "node",
     fixedExtension: false,
+  },
+  {
+    entry: {
+      "eslint-plugin": "./src/eslint-plugin.ts",
+    },
+    dts: true,
+    target: "node22",
+    platform: "node",
+    fixedExtension: false,
+    env: {
+      VERSION: process.env.VERSION ?? packageJson.version,
+    },
   },
 ]);

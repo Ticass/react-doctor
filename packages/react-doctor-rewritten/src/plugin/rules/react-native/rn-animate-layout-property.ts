@@ -1,0 +1,73 @@
+import { defineRule } from "../../utils/define-rule.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+const REANIMATED_LAYOUT_KEYS = new Set([
+  "width",
+  "height",
+  "top",
+  "left",
+  "right",
+  "bottom",
+  "minWidth",
+  "minHeight",
+  "maxWidth",
+  "maxHeight",
+  "marginTop",
+  "marginBottom",
+  "marginLeft",
+  "marginRight",
+  "paddingTop",
+  "paddingBottom",
+  "paddingLeft",
+  "paddingRight",
+  "flex",
+  "flexBasis",
+  "flexGrow",
+  "flexShrink",
+]);
+
+const findReturnedObject = (callback: EsTreeNode): EsTreeNode | null => {
+  if (callback.type !== "ArrowFunctionExpression" && callback.type !== "FunctionExpression") {
+    return null;
+  }
+  const body = callback.body;
+  if (body?.type === "ObjectExpression") return body;
+  if (body?.type !== "BlockStatement") return null;
+  for (const stmt of body.body ?? []) {
+    if (stmt.type === "ReturnStatement" && stmt.argument?.type === "ObjectExpression") {
+      return stmt.argument;
+    }
+  }
+  return null;
+};
+
+// HACK: in Reanimated, `useAnimatedStyle(() => ({ height: …, width: … }))`
+// runs the animation on the JS layout thread (or worse, triggers actual
+// layout passes per frame). transform / opacity stay on the GPU
+// compositor. For anything driven by `withTiming` / `withSpring` /
+// shared values, animate `transform: [{ translateX/Y }, { scale }]` or
+// `opacity` instead.
+export const rnAnimateLayoutProperty = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    CallExpression(node: EsTreeNode) {
+      if (node.callee?.type !== "Identifier" || node.callee.name !== "useAnimatedStyle") return;
+      const callback = node.arguments?.[0];
+      if (!callback) return;
+      const returnedObject = findReturnedObject(callback);
+      if (!returnedObject) return;
+
+      for (const property of returnedObject.properties ?? []) {
+        if (property.type !== "Property") continue;
+        if (property.key?.type !== "Identifier") continue;
+        if (!REANIMATED_LAYOUT_KEYS.has(property.key.name)) continue;
+
+        context.report({
+          node: property,
+          message: `useAnimatedStyle animating "${property.key.name}" — layout properties run on the layout thread; use transform: [{ translateX/Y }, { scale }] or opacity for GPU-accelerated animation`,
+        });
+      }
+    },
+  }),
+});

@@ -10,7 +10,10 @@ export const isLoggerSilent = (): boolean => isSilent;
 
 export const logger = {
   error(...args: unknown[]) {
-    if (isSilent) return;
+    // HACK: errors must always be visible on stderr — even in silent
+    // (--json / --hide-branding) modes.  Silencing them makes failures
+    // completely invisible to users running in CI with output redirected
+    // to a file, leaving only a bare "exit code 1" with no diagnosis.
     console.error(highlighter.error(args.join(" ")));
   },
   warn(...args: unknown[]) {

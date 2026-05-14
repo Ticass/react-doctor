@@ -1,0 +1,30 @@
+import { defineRule } from "../../utils/define-rule.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+
+const SVG_PATH_HIGH_PRECISION_PATTERN = /\d+\.\d{4,}/;
+
+const SVG_PATH_ATTRIBUTES = new Set(["d", "points", "transform"]);
+
+// HACK: SVG path strings with 4+ decimals (e.g. `M 10.293847 20.847362`)
+// add bytes for sub-pixel precision the user can't see. Most editors
+// emit these by default; truncating to 1–2 decimals trims 30–50% off
+// markup with no visible difference.
+export const renderingSvgPrecision = defineRule<Rule>({
+  create: (context: RuleContext) => ({
+    JSXAttribute(node: EsTreeNode) {
+      if (node.name?.type !== "JSXIdentifier") return;
+      if (!SVG_PATH_ATTRIBUTES.has(node.name.name)) return;
+      if (node.value?.type !== "Literal") return;
+      const value = node.value.value;
+      if (typeof value !== "string") return;
+      if (!SVG_PATH_HIGH_PRECISION_PATTERN.test(value)) return;
+
+      context.report({
+        node,
+        message: `SVG ${node.name.name} attribute uses 4+ decimal precision — truncate to 1–2 decimals to shrink markup with no visible difference`,
+      });
+    },
+  }),
+});

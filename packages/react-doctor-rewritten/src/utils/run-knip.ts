@@ -18,12 +18,15 @@ interface KnipIssueDescriptor {
   severity: "error" | "warning";
 }
 
-const KNIP_ISSUE_TYPE_DESCRIPTORS: Record<string, KnipIssueDescriptor> = {
-  files: { category: "Dead Code", message: "Unused file", severity: "warning" },
-  exports: { category: "Dead Code", message: "Unused export", severity: "warning" },
-  types: { category: "Dead Code", message: "Unused type", severity: "warning" },
-  duplicates: { category: "Dead Code", message: "Duplicate export", severity: "warning" },
-};
+// HACK: Map (not plain object) so an unexpected `issueType` of
+// `"constructor"`, `"toString"`, etc. doesn't fall through to a
+// `Object.prototype.X` value and bypass the FALLBACK_KNIP_DESCRIPTOR.
+const KNIP_ISSUE_TYPE_DESCRIPTORS = new Map<string, KnipIssueDescriptor>([
+  ["files", { category: "Dead Code", message: "Unused file", severity: "warning" }],
+  ["exports", { category: "Dead Code", message: "Unused export", severity: "warning" }],
+  ["types", { category: "Dead Code", message: "Unused type", severity: "warning" }],
+  ["duplicates", { category: "Dead Code", message: "Duplicate export", severity: "warning" }],
+]);
 
 const FALLBACK_KNIP_DESCRIPTOR: KnipIssueDescriptor = {
   category: "Dead Code",
@@ -36,7 +39,7 @@ const collectIssueRecords = (
   issueType: string,
   rootDirectory: string,
 ): Diagnostic[] => {
-  const descriptor = KNIP_ISSUE_TYPE_DESCRIPTORS[issueType] ?? FALLBACK_KNIP_DESCRIPTOR;
+  const descriptor = KNIP_ISSUE_TYPE_DESCRIPTORS.get(issueType) ?? FALLBACK_KNIP_DESCRIPTOR;
   const diagnostics: Diagnostic[] = [];
 
   for (const issues of Object.values(records)) {
@@ -95,7 +98,11 @@ const tryDisableFailedPlugin = (
   disabledPlugins: Set<string>,
 ): boolean => {
   const failedPlugin = extractFailedPluginName(error);
-  if (!failedPlugin || !(failedPlugin in parsedConfig) || disabledPlugins.has(failedPlugin)) {
+  if (
+    !failedPlugin ||
+    !Object.hasOwn(parsedConfig, failedPlugin) ||
+    disabledPlugins.has(failedPlugin)
+  ) {
     return false;
   }
   disabledPlugins.add(failedPlugin);
@@ -106,6 +113,7 @@ const tryDisableFailedPlugin = (
 const runKnipWithOptions = async (
   knipCwd: string,
   workspaceName?: string,
+  entryFiles?: string[],
 ): Promise<KnipResults> => {
   const tsConfigFile = resolveTsConfigFile(knipCwd);
   const options = await silenced(() =>
@@ -116,6 +124,14 @@ const runKnipWithOptions = async (
       ...(tsConfigFile ? { tsConfigFile } : {}),
     }),
   );
+
+  if (entryFiles && entryFiles.length > 0) {
+    const parsedConfigForEntries = options.parsedConfig as Record<string, unknown>;
+    const existingEntry = Array.isArray(parsedConfigForEntries.entry)
+      ? (parsedConfigForEntries.entry as string[])
+      : [];
+    parsedConfigForEntries.entry = [...existingEntry, ...entryFiles];
+  }
 
   const parsedConfig = options.parsedConfig as Record<string, unknown>;
   sanitizeKnipConfigPatterns(parsedConfig);
@@ -152,18 +168,22 @@ const resolveWorkspaceName = (rootDirectory: string): string => {
 const runKnipForProject = async (
   rootDirectory: string,
   monorepoRoot: string | null,
+  entryFiles?: string[],
 ): Promise<KnipResults> => {
   if (!monorepoRoot || hasKnipConfig(rootDirectory)) {
-    return runKnipWithOptions(rootDirectory);
+    return runKnipWithOptions(rootDirectory, undefined, entryFiles);
   }
   try {
-    return await runKnipWithOptions(monorepoRoot, resolveWorkspaceName(rootDirectory));
+    return await runKnipWithOptions(monorepoRoot, resolveWorkspaceName(rootDirectory), entryFiles);
   } catch {
-    return runKnipWithOptions(rootDirectory);
+    return runKnipWithOptions(rootDirectory, undefined, entryFiles);
   }
 };
 
-export const runKnip = async (rootDirectory: string): Promise<Diagnostic[]> => {
+export const runKnip = async (
+  rootDirectory: string,
+  entryFiles?: string[],
+): Promise<Diagnostic[]> => {
   const monorepoRoot = findMonorepoRoot(rootDirectory);
   const hasInstalledDependencies =
     hasNodeModules(rootDirectory) || (monorepoRoot !== null && hasNodeModules(monorepoRoot));
@@ -172,12 +192,12 @@ export const runKnip = async (rootDirectory: string): Promise<Diagnostic[]> => {
     return [];
   }
 
-  const knipResult = await runKnipForProject(rootDirectory, monorepoRoot);
+  const knipResult = await runKnipForProject(rootDirectory, monorepoRoot, entryFiles);
 
   const { issues } = knipResult;
   const diagnostics: Diagnostic[] = [];
 
-  const filesDescriptor = KNIP_ISSUE_TYPE_DESCRIPTORS.files;
+  const filesDescriptor = KNIP_ISSUE_TYPE_DESCRIPTORS.get("files") ?? FALLBACK_KNIP_DESCRIPTOR;
   for (const unusedFilePath of collectUnusedFilePaths(issues.files)) {
     diagnostics.push({
       filePath: path.relative(rootDirectory, unusedFilePath),

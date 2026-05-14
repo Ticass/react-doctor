@@ -21,7 +21,7 @@ import {
   collectIgnorePatterns,
 } from "../../src/utils/collect-ignore-patterns.js";
 import { runOxlint } from "../../src/utils/run-oxlint.js";
-import { setupReactProject } from "./_helpers.js";
+import { buildTestProject, setupReactProject } from "./_helpers.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rd-respect-lint-ignores-"));
 
@@ -63,10 +63,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     const derivedStateHits = diagnostics.filter((d) => d.rule === "no-derived-state-effect");
@@ -90,10 +87,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
     });
 
     expect(diagnostics.filter((d) => d.rule === "no-derived-state-effect")).toHaveLength(0);
@@ -107,10 +101,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/skipped.tsx"],
     });
 
@@ -125,10 +116,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/skipped.tsx"],
     });
 
@@ -145,10 +133,7 @@ describe("default behavior: respect additional ignore-file sources", () => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/skipped.tsx"],
     });
 
@@ -166,10 +151,7 @@ describe("default behavior: respect additional ignore-file sources", () => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/from-eslintignore.tsx", "src/from-oxlintignore.tsx", "src/normal.tsx"],
     });
 
@@ -191,10 +173,7 @@ describe("default behavior: respect additional ignore-file sources", () => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/vendored.tsx", "src/generated.tsx", "src/normal.tsx"],
     });
 
@@ -212,10 +191,7 @@ describe("default behavior: respect additional ignore-file sources", () => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/please-lint-me.tsx"],
     });
 
@@ -254,10 +230,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       respectInlineDisables: false,
     });
 
@@ -288,10 +261,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       respectInlineDisables: false,
     });
 
@@ -312,10 +282,7 @@ export const FullName = ({ first, last }: { first: string; last: string }) => {
 
     const diagnostics = await runOxlint({
       rootDirectory: projectDir,
-      hasTypeScript: true,
-      framework: "unknown",
-      hasReactCompiler: false,
-      hasTanStackQuery: false,
+      project: buildTestProject({ rootDirectory: projectDir }),
       includePaths: ["src/skipped.tsx"],
       respectInlineDisables: false,
     });

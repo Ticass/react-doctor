@@ -1,4 +1,5 @@
 import ora from "ora";
+import { SPINNER_INDENT_CHARS } from "../constants.js";
 
 let sharedInstance: ReturnType<typeof ora> | null = null;
 let activeCount = 0;
@@ -30,7 +31,7 @@ const finalize = (method: "succeed" | "fail", originalText: string, displayText:
   }
 
   sharedInstance.stop();
-  ora(displayText).start()[method](displayText);
+  ora({ text: displayText, indent: SPINNER_INDENT_CHARS }).start()[method](displayText);
 
   const [remainingText] = pendingTexts;
   if (remainingText) {
@@ -47,7 +48,7 @@ export const spinner = (text: string) => ({
     pendingTexts.add(text);
 
     if (!sharedInstance) {
-      sharedInstance = ora({ text }).start();
+      sharedInstance = ora({ text, indent: SPINNER_INDENT_CHARS }).start();
     } else {
       sharedInstance.text = text;
     }

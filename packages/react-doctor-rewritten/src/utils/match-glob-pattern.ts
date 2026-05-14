@@ -33,8 +33,3 @@ export const compileGlobPattern = (pattern: string): RegExp => {
   regexSource += "$";
   return new RegExp(regexSource);
 };
-
-export const matchGlobPattern = (filePath: string, pattern: string): boolean => {
-  const normalizedPath = filePath.replace(/\\/g, "/");
-  return compileGlobPattern(pattern).test(normalizedPath);
-};

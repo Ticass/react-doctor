@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { Diagnostic } from "../../src/types.js";
+import { runOxlint } from "../../src/utils/run-oxlint.js";
+import type { Diagnostic, ProjectInfo } from "../../src/types.js";
 
 export const writeFile = (filePath: string, contents: string): void => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -81,4 +82,94 @@ export const setupReactProject = (
     writeFile(path.join(projectDir, relativePath), content);
   }
   return projectDir;
+};
+
+export interface CollectRuleHitsOptions {
+  /** React major to forward to runOxlint (default: 19). Pass null to test the unresolvable-version path. */
+  reactMajorVersion?: number | null;
+  /**
+   * Tailwind dependency spec to forward to runOxlint (default: omitted →
+   * `null`, which optimistically assumes latest Tailwind so every
+   * Tailwind-version-gated rule fires). Pass an explicit string
+   * (`"^3.4.0"`, `"3.3.0"`, `"^4.0.0"`) to exercise version gating
+   * for rules like `design-no-redundant-size-axes`.
+   */
+  tailwindVersion?: string | null;
+  /** Project framework hint (default: "unknown"). Set to "react-native" for RN-only rules. */
+  framework?: "unknown" | "react-native";
+  hasReactCompiler?: boolean;
+  hasTanStackQuery?: boolean;
+}
+
+export interface BuildTestProjectOptions {
+  rootDirectory: string;
+  framework?: ProjectInfo["framework"];
+  hasReactCompiler?: boolean;
+  hasTanStackQuery?: boolean;
+  reactMajorVersion?: number | null;
+  hasTypeScript?: boolean;
+  tailwindVersion?: string | null;
+}
+
+export const buildTestProject = (options: BuildTestProjectOptions): ProjectInfo => {
+  const reactMajorVersion = options.reactMajorVersion ?? 19;
+  return {
+    rootDirectory: options.rootDirectory,
+    projectName: path.basename(options.rootDirectory),
+    reactVersion: reactMajorVersion !== null ? `^${reactMajorVersion}.0.0` : null,
+    reactMajorVersion,
+    tailwindVersion: options.tailwindVersion ?? null,
+    framework: options.framework ?? "unknown",
+    hasTypeScript: options.hasTypeScript ?? true,
+    hasReactCompiler: options.hasReactCompiler ?? false,
+    hasTanStackQuery: options.hasTanStackQuery ?? false,
+    sourceFileCount: 0,
+  };
+};
+
+export interface RuleHit {
+  filePath: string;
+  message: string;
+}
+
+// Replaces the five near-identical `collectRuleHits` helpers that each
+// regression suite previously declared at the top of the file. Defaults
+// match the most common shape (React 19, framework="unknown"); pass an
+// options bag to override per-test.
+//
+// HACK: distinguish "caller didn't pass `reactMajorVersion`" (omit → 19,
+// the synthetic project's actual React version) from "caller explicitly
+// passed `null`" (testing the unresolvable-version code path). A naive
+// `options.reactMajorVersion ?? 19` collapses both into 19 and silently
+// changes what null-version tests are testing.
+export const collectRuleHits = async (
+  projectDir: string,
+  ruleId: string,
+  options: CollectRuleHitsOptions = {},
+): Promise<RuleHit[]> => {
+  const reactMajorVersion = Object.hasOwn(options, "reactMajorVersion")
+    ? (options.reactMajorVersion ?? null)
+    : 19;
+  const project: ProjectInfo = {
+    rootDirectory: projectDir,
+    projectName: path.basename(projectDir),
+    reactVersion: reactMajorVersion !== null ? `^${reactMajorVersion}.0.0` : null,
+    reactMajorVersion,
+    tailwindVersion: options.tailwindVersion ?? null,
+    framework: options.framework ?? "unknown",
+    hasTypeScript: true,
+    hasReactCompiler: options.hasReactCompiler ?? false,
+    hasTanStackQuery: options.hasTanStackQuery ?? false,
+    sourceFileCount: 0,
+  };
+  const diagnostics = await runOxlint({
+    rootDirectory: projectDir,
+    project,
+  });
+  return diagnostics
+    .filter((diagnostic) => diagnostic.rule === ruleId)
+    .map((diagnostic) => ({
+      filePath: diagnostic.filePath,
+      message: diagnostic.message,
+    }));
 };

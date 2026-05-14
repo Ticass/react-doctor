@@ -1,0 +1,223 @@
+import { EFFECT_HOOK_NAMES, SUBSCRIPTION_METHOD_NAMES } from "../../constants.js";
+import { areExpressionsStructurallyEqual } from "../../utils/are-expressions-structurally-equal.js";
+import { defineRule } from "../../utils/define-rule.js";
+import { getCallbackStatements } from "../../utils/get-callback-statements.js";
+import { getEffectCallback } from "../../utils/get-effect-callback.js";
+import { isComponentAssignment } from "../../utils/is-component-assignment.js";
+import { isHookCall } from "../../utils/is-hook-call.js";
+import { isSetterIdentifier } from "../../utils/is-setter-identifier.js";
+import { isUppercaseName } from "../../utils/is-uppercase-name.js";
+import { walkAst } from "../../utils/walk-ast.js";
+import type { EsTreeNode } from "../../utils/es-tree-node.js";
+import type { Rule } from "../../utils/rule.js";
+import type { RuleContext } from "../../utils/rule-context.js";
+import { isCleanupReturn } from "./utils/is-cleanup-return.js";
+import { collectUseStateBindings } from "./utils/collect-use-state-bindings.js";
+
+// HACK: §11 of "You Might Not Need an Effect" + the linked
+// `useSyncExternalStore` docs warn that pairing a `useState(getSnapshot())`
+// with a `useEffect(() => store.subscribe(() => setSnapshot(getSnapshot())))`
+// reimplements `useSyncExternalStore` in user space — incorrectly.
+// The hand-rolled version doesn't support concurrent rendering,
+// allows tearing during transitions, and lacks server-snapshot
+// support during hydration.
+//
+// We require a four-vertex AST match before reporting:
+//
+//   (1) useEffect with empty deps                   `[]`
+//   (2) body declares `const u = X.subscribe(handler)` OR
+//       directly invokes a subscription method      X.addEventListener(...)
+//   (3) cleanup is a `return` that either returns the unsubscribe
+//       binding directly OR returns a closure that unsubscribes
+//   (4) handler is a single `setY(<getter>)` whose `<getter>`
+//       is structurally equal to the matching useState's initializer
+//
+// The combined match is so specific that real-world false positives
+// are essentially impossible.
+const findUseEffectsInComponent = (componentBody: EsTreeNode | undefined): EsTreeNode[] => {
+  const effectCalls: EsTreeNode[] = [];
+  if (componentBody?.type !== "BlockStatement") return effectCalls;
+  for (const statement of componentBody.body ?? []) {
+    walkAst(statement, (child: EsTreeNode) => {
+      if (child.type === "CallExpression" && isHookCall(child, EFFECT_HOOK_NAMES)) {
+        effectCalls.push(child);
+      }
+    });
+  }
+  return effectCalls;
+};
+
+const findSubscriptionCall = (
+  effectBodyStatements: EsTreeNode[],
+): { call: EsTreeNode; boundUnsubscribeName: string | null } | null => {
+  for (const statement of effectBodyStatements) {
+    if (statement.type === "VariableDeclaration") {
+      for (const declarator of statement.declarations ?? []) {
+        const init = declarator.init;
+        if (init?.type !== "CallExpression") continue;
+        if (init.callee?.type !== "MemberExpression") continue;
+        if (init.callee.property?.type !== "Identifier") continue;
+        if (!SUBSCRIPTION_METHOD_NAMES.has(init.callee.property.name)) continue;
+        const boundUnsubscribeName =
+          declarator.id?.type === "Identifier" ? declarator.id.name : null;
+        return { call: init, boundUnsubscribeName };
+      }
+    }
+    if (statement.type === "ExpressionStatement") {
+      const expression = statement.expression;
+      if (expression?.type !== "CallExpression") continue;
+      if (expression.callee?.type !== "MemberExpression") continue;
+      if (expression.callee.property?.type !== "Identifier") continue;
+      if (!SUBSCRIPTION_METHOD_NAMES.has(expression.callee.property.name)) continue;
+      return { call: expression, boundUnsubscribeName: null };
+    }
+  }
+  return null;
+};
+
+// HACK: `window.addEventListener("online", onChange)` is the dominant
+// real-world shape — the handler is declared as a separate `const` in
+// the effect body so it can be shared with `removeEventListener` in the
+// cleanup. We have to resolve the Identifier argument back to its
+// locally-declared arrow/function init before the structural setter
+// check can run.
+const getSubscriptionHandlerArgument = (
+  subscribeCall: EsTreeNode,
+  effectBodyStatements: EsTreeNode[],
+): EsTreeNode | null => {
+  for (const argument of subscribeCall.arguments ?? []) {
+    if (argument.type === "ArrowFunctionExpression" || argument.type === "FunctionExpression") {
+      return argument;
+    }
+    if (argument.type === "Identifier") {
+      for (const statement of effectBodyStatements) {
+        if (statement.type !== "VariableDeclaration") continue;
+        for (const declarator of statement.declarations ?? []) {
+          if (declarator.id?.type !== "Identifier") continue;
+          if (declarator.id.name !== argument.name) continue;
+          const init = declarator.init;
+          if (init?.type === "ArrowFunctionExpression" || init?.type === "FunctionExpression") {
+            return init;
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+const getSingleSetterCallFromHandler = (
+  handler: EsTreeNode,
+): { setterName: string; setterArgument: EsTreeNode } | null => {
+  const handlerStatements = getCallbackStatements(handler);
+  if (handlerStatements.length !== 1) return null;
+  const onlyStatement = handlerStatements[0];
+  const expression =
+    onlyStatement.type === "ExpressionStatement" ? onlyStatement.expression : onlyStatement;
+  if (expression?.type !== "CallExpression") return null;
+  if (expression.callee?.type !== "Identifier") return null;
+  if (!isSetterIdentifier(expression.callee.name)) return null;
+  if (!expression.arguments?.length) return null;
+  return {
+    setterName: expression.callee.name,
+    setterArgument: expression.arguments[0],
+  };
+};
+
+const cleanupReleasesSubscription = (
+  effectBodyStatements: EsTreeNode[],
+  boundUnsubscribeName: string | null,
+): boolean => {
+  const lastStatement = effectBodyStatements[effectBodyStatements.length - 1];
+  if (lastStatement?.type !== "ReturnStatement") return false;
+  const knownBoundReleaseNames = new Set<string>();
+  if (boundUnsubscribeName) knownBoundReleaseNames.add(boundUnsubscribeName);
+  return isCleanupReturn(lastStatement.argument, knownBoundReleaseNames);
+};
+
+export const preferUseSyncExternalStore = defineRule<Rule>({
+  create: (context: RuleContext) => {
+    const checkComponent = (componentBody: EsTreeNode | null | undefined): void => {
+      if (!componentBody || componentBody.type !== "BlockStatement") return;
+
+      const useStateBindings = collectUseStateBindings(componentBody);
+      if (useStateBindings.length === 0) return;
+
+      const useStateInitializerByValueName = new Map<string, EsTreeNode>();
+      for (const binding of useStateBindings) {
+        const useStateCall = binding.declarator.init;
+        const initializerArgument = useStateCall?.arguments?.[0];
+        if (!initializerArgument) continue;
+        // HACK: useState(() => getSnapshot()) — unwrap the lazy
+        // initializer so the structural match against the
+        // subscribe-handler's setter argument still resolves.
+        if (
+          (initializerArgument.type === "ArrowFunctionExpression" ||
+            initializerArgument.type === "FunctionExpression") &&
+          initializerArgument.body?.type !== "BlockStatement"
+        ) {
+          useStateInitializerByValueName.set(binding.valueName, initializerArgument.body);
+        } else {
+          useStateInitializerByValueName.set(binding.valueName, initializerArgument);
+        }
+      }
+
+      const setterNameToValueName = new Map<string, string>();
+      for (const binding of useStateBindings) {
+        setterNameToValueName.set(binding.setterName, binding.valueName);
+      }
+
+      for (const effectCall of findUseEffectsInComponent(componentBody)) {
+        if ((effectCall.arguments?.length ?? 0) < 2) continue;
+        const depsNode = effectCall.arguments[1];
+        if (depsNode.type !== "ArrayExpression") continue;
+        if ((depsNode.elements?.length ?? 0) !== 0) continue;
+
+        const callback = getEffectCallback(effectCall);
+        if (!callback || callback.body?.type !== "BlockStatement") continue;
+        const effectBodyStatements = callback.body.body ?? [];
+        if (effectBodyStatements.length < 2) continue;
+
+        const subscription = findSubscriptionCall(effectBodyStatements);
+        if (!subscription) continue;
+
+        const handler = getSubscriptionHandlerArgument(subscription.call, effectBodyStatements);
+        if (!handler) continue;
+
+        const setterPayload = getSingleSetterCallFromHandler(handler);
+        if (!setterPayload) continue;
+
+        const valueName = setterNameToValueName.get(setterPayload.setterName);
+        if (!valueName) continue;
+
+        const useStateInitializer = useStateInitializerByValueName.get(valueName);
+        if (!useStateInitializer) continue;
+
+        if (!areExpressionsStructurallyEqual(useStateInitializer, setterPayload.setterArgument)) {
+          continue;
+        }
+
+        if (!cleanupReleasesSubscription(effectBodyStatements, subscription.boundUnsubscribeName)) {
+          continue;
+        }
+
+        const matchingBinding = useStateBindings.find((binding) => binding.valueName === valueName);
+        context.report({
+          node: matchingBinding?.declarator ?? effectCall,
+          message: `useState "${valueName}" is synchronized with an external store via useEffect — replace this useState + useEffect pair with useSyncExternalStore(subscribe, getSnapshot) to avoid tearing during concurrent renders`,
+        });
+      }
+    };
+
+    return {
+      FunctionDeclaration(node: EsTreeNode) {
+        if (!node.id?.name || !isUppercaseName(node.id.name)) return;
+        checkComponent(node.body);
+      },
+      VariableDeclarator(node: EsTreeNode) {
+        if (!isComponentAssignment(node)) return;
+        checkComponent(node.init?.body);
+      },
+    };
+  },
+});

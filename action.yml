@@ -22,10 +22,13 @@ inputs:
     required: false
   fail-on:
     description: "Exit with error code on diagnostics: error, warning, none"
-    default: "error"
+    default: "none"
   node-version:
-    description: "Node.js version to use"
-    default: "20"
+    description: "Node.js version to use (must be >=22)"
+    default: "22"
+  version:
+    description: "Version of react-doctor-rewritten to use (npm tag or semver)"
+    default: "latest"
 
 outputs:
   score:
@@ -39,17 +42,8 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
-    - name: Install pnpm and build react-doctor
+    - name: Run React Doctor
       shell: bash
-      env:
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
-      run: |
-        npm install -g pnpm@10
-        cd "$GITHUB_ACTION_PATH"
-        pnpm install --no-frozen-lockfile
-        pnpm build
-
-    - shell: bash
       env:
         INPUT_DIRECTORY: ${{ inputs.directory }}
         INPUT_VERBOSE: ${{ inputs.verbose }}
@@ -57,14 +51,14 @@ runs:
         INPUT_DIFF: ${{ inputs.diff }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
-        DOCTOR="node $GITHUB_ACTION_PATH/packages/react-doctor-rewritten/dist/cli.js"
-
         FLAGS="--fail-on $INPUT_FAIL_ON"
         if [ "$INPUT_VERBOSE" = "true" ]; then FLAGS="$FLAGS --verbose"; fi
         if [ -n "$INPUT_PROJECT" ]; then FLAGS="$FLAGS --project $INPUT_PROJECT"; fi
         if [ -n "$INPUT_DIFF" ]; then FLAGS="$FLAGS --diff $INPUT_DIFF"; fi
+
+        DOCTOR="npx --yes react-doctor-rewritten@$INPUT_VERSION"
 
         if [ -n "$INPUT_GITHUB_TOKEN" ]; then
           $DOCTOR "$INPUT_DIRECTORY" $FLAGS --hide-branding | tee /tmp/react-doctor-output.txt
@@ -77,10 +71,9 @@ runs:
       shell: bash
       env:
         INPUT_DIRECTORY: ${{ inputs.directory }}
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
-        DOCTOR="node $GITHUB_ACTION_PATH/packages/react-doctor-rewritten/dist/cli.js"
-        SCORE=$($DOCTOR "$INPUT_DIRECTORY" --score 2>/dev/null | tail -1 | tr -d '[:space:]')
+        SCORE=$(npx --yes react-doctor-rewritten@$INPUT_VERSION "$INPUT_DIRECTORY" --score 2>/dev/null | tail -1 | tr -d '[:space:]')
         if [[ -n "$SCORE" && "$SCORE" =~ ^[0-9]+$ ]]; then
           echo "score=$SCORE" >> "$GITHUB_OUTPUT"
         fi
