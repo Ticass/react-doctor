@@ -16,7 +16,13 @@ import { printProjectDetection } from "./cli/render-project-detection.js";
 import { printSummary } from "./cli/render-summary.js";
 import { resolveOxlintNode } from "./cli/resolve-oxlint-node.js";
 import { NoReactDependencyError } from "./errors.js";
-import type { Diagnostic, NoBrandingThread, ReactDoctorConfig, ScanOptions, ScanResult } from "./types.js";
+import type {
+  Diagnostic,
+  NoBrandingThread,
+  ReactDoctorConfig,
+  ScanOptions,
+  ScanResult,
+} from "./types.js";
 import { buildNoBrandingReport } from "./utils/no-branding-diagnostics.js";
 import {
   calculateScore,

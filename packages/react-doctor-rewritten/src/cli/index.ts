@@ -171,7 +171,8 @@ const resolveCliScanOptions = (
   const isCliOverride = (optionName: string) =>
     programInstance.getOptionValueSource(optionName) === "cli";
 
-  const noBranding = flags.hideBranding || flags.hideBrandingPr || (userConfig?.noBranding ?? false);
+  const noBranding =
+    flags.hideBranding || flags.hideBrandingPr || (userConfig?.noBranding ?? false);
 
   return {
     lint: isCliOverride("lint") ? flags.lint : (userConfig?.lint ?? true),
@@ -422,10 +423,7 @@ const program = new Command()
     "--no-respect-inline-disables",
     "audit mode: neutralize inline lint suppressions before scanning",
   )
-  .option(
-    "--hide-branding",
-    "suppress ASCII branding and emit a clean GitHub-flavored HTML report",
-  )
+  .option("--hide-branding", "suppress ASCII branding and emit a clean GitHub-flavored HTML report")
   .option(
     "--hide-branding-pr",
     "like --hide-branding, but tags the report as PR-scoped and forces diff mode",
