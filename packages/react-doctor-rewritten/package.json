@@ -25,11 +25,11 @@
   "author": "Alexis Grenier",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Ticass/react-doctor-rewritten.git",
+    "url": "git+https://github.com/Ticass/react-doctor-rewritten.git",
     "directory": "packages/react-doctor-rewritten"
   },
   "bin": {
-    "react-doctor-rewritten": "./bin/react-doctor.js"
+    "react-doctor-rewritten": "bin/react-doctor.js"
   },
   "files": [
     "bin/**",
