@@ -19,6 +19,7 @@ import type {
 import { buildJsonReport } from "../utils/build-json-report.js";
 import { buildJsonReportError } from "../utils/build-json-report-error.js";
 import { filterSourceFiles, getDiffInfo } from "../utils/get-diff-files.js";
+import { formatErrorChain } from "../utils/format-error-chain.js";
 import { highlighter } from "../utils/highlighter.js";
 import { loadConfigWithSource } from "../utils/load-config.js";
 import { resolveConfigRootDir } from "../utils/resolve-config-root-dir.js";
@@ -697,12 +698,24 @@ const program = new Command()
           process.exitCode = 1;
           return;
         }
+        // HACK: in --hide-branding mode the logger is silenced so handleError
+        // produces no visible output — the process just exits 1 with zero
+        // feedback. Write the error chain to stderr directly so CI users can
+        // see what went wrong even when stdout is redirected to a file.
+        if (isNoBrandingMode) {
+          process.stderr.write(`[react-doctor] Error: ${formatErrorChain(error)}\n`);
+          process.exitCode = 1;
+          return;
+        }
         handleError(error);
       } catch {
         if (isJsonMode) {
           process.stdout.write(
             '{"schemaVersion":1,"ok":false,"error":{"message":"Internal error","name":"Error","chain":[]}}\n',
           );
+        }
+        if (isNoBrandingMode) {
+          process.stderr.write("[react-doctor] Internal error (see above)\n");
         }
         process.exitCode = 1;
       }
