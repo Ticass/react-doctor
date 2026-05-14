@@ -597,6 +597,32 @@ const program = new Command()
       const diffInfo = shouldDetectDiff ? getDiffInfo(resolvedDirectory, explicitBaseBranch) : null;
       const isDiffMode = await resolveDiffMode(diffInfo, effectiveDiff, shouldSkipPrompts, isQuiet);
 
+      // HACK: --hide-branding-pr means "post a PR-scoped report comment in CI".
+      // If we can't actually compute a diff (e.g. detached HEAD on a merge ref
+      // with no GITHUB_BASE_REF) we'd otherwise silently emit a full-repo scan
+      // labeled "Pull Request Changes", which is misleading. Fail loudly instead
+      // so the workflow surfaces the misconfiguration.
+      if (flags.hideBrandingPr && !isDiffMode) {
+        process.stderr.write(
+          "[react-doctor] --hide-branding-pr could not determine PR diff base.\n" +
+            "  Ensure the workflow runs with fetch-depth: 0 and the GITHUB_BASE_REF env var\n" +
+            "  is available (set automatically on pull_request events).\n" +
+            "  Refusing to post a full-repo scan under a 'Pull Request Changes' heading.\n",
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      // HACK: in --hide-branding modes the logger is silenced, so any
+      // "falling back to full scan" warning emitted by resolveDiffMode is
+      // dropped. Mirror it on stderr so CI users can see *why* a diff scan
+      // turned into a full scan instead of being told nothing.
+      if (isNoBrandingMode && wantsDiffMode && !isDiffMode) {
+        process.stderr.write(
+          "[react-doctor] No feature branch or uncommitted changes detected — running full scan.\n",
+        );
+      }
+
       // HACK: set the cancel-mode marker BEFORE the scan loop runs — if the
       // user hits Ctrl-C mid-scan, the SIGINT handler reads currentReportMode
       // for the JSON cancel report. Setting it after the loop completes

@@ -78,15 +78,50 @@ const getUncommittedChangedFiles = (directory: string): string[] => {
   return output ?? [];
 };
 
+// HACK: on a `pull_request` event, actions/checkout@v4+ checks out the PR
+// merge ref (`refs/pull/N/merge`) with HEAD *detached*, so
+// `git rev-parse --abbrev-ref HEAD` returns "HEAD" and our normal branch
+// detection bails out. Use the GitHub Actions env vars as a fallback so
+// `--diff` / `--hide-branding-pr` actually compare against the PR base
+// instead of silently falling back to a full repo scan.
+const getCiPullRequestRefs = (): { headRef: string; baseRef: string } | null => {
+  if (process.env.GITHUB_EVENT_NAME !== "pull_request") return null;
+  const headRef = process.env.GITHUB_HEAD_REF;
+  const baseRef = process.env.GITHUB_BASE_REF;
+  if (!headRef || !baseRef) return null;
+  return { headRef, baseRef };
+};
+
+const resolveCiBaseBranchRef = (directory: string, baseRef: string): string | null => {
+  // Prefer the remote-tracking ref because in CI the local branch usually
+  // doesn't exist — only `origin/<base>` is fetched.
+  const remoteRef = `origin/${baseRef}`;
+  if (branchExists(directory, remoteRef)) return remoteRef;
+  if (branchExists(directory, baseRef)) return baseRef;
+  return null;
+};
+
 export const getDiffInfo = (directory: string, explicitBaseBranch?: string): DiffInfo | null => {
   if (explicitBaseBranch !== undefined && explicitBaseBranch.trim().length === 0) {
     throw new Error("Diff base branch cannot be empty.");
   }
 
-  const currentBranch = getCurrentBranch(directory);
-  if (!currentBranch) return null;
+  let currentBranch = getCurrentBranch(directory);
+  let baseBranch = explicitBaseBranch ?? detectDefaultBranch(directory);
 
-  const baseBranch = explicitBaseBranch ?? detectDefaultBranch(directory);
+  // CI fallback for detached HEAD on PR merge refs.
+  if (!currentBranch || !baseBranch) {
+    const ciRefs = getCiPullRequestRefs();
+    if (ciRefs) {
+      if (!currentBranch) currentBranch = ciRefs.headRef;
+      if (!baseBranch) {
+        const resolvedBaseRef = resolveCiBaseBranchRef(directory, ciRefs.baseRef);
+        if (resolvedBaseRef) baseBranch = resolvedBaseRef;
+      }
+    }
+  }
+
+  if (!currentBranch) return null;
   if (!baseBranch) return null;
 
   if (explicitBaseBranch && !branchExists(directory, explicitBaseBranch)) {
